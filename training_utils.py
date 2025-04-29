@@ -529,7 +529,7 @@ def test_SequentialEnKF(loader, args, infl=1, H_info=None, localization=False):
 
 def set_models(args):
     # set models
-    if args.v == 'CorrTerm':
+    if args.v == 'CorrTerms':
         model = Simple_MLP(d_input=args.input_dim, d_output=args.obs_dim + args.ori_dim, num_hidden_layers=2).to(args.device)
     elif args.v == 'EtE':
         model = Simple_MLP(d_input=args.input_dim, d_output=args.ori_dim, num_hidden_layers=3).to(args.device)

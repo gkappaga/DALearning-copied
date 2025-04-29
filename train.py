@@ -14,6 +14,8 @@ from training_utils import train_model, test_model, set_models
 
 if __name__ == "__main__":
     args = get_parameters()
+
+    DEVICE = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     
     if not os.path.isdir(args.save_folder):
         os.makedirs(args.save_folder)
@@ -37,6 +39,7 @@ if __name__ == "__main__":
 
         # set models
         model_list = set_models(args)
+        model_list = [m.to(DEVICE) for m in model_list]
         model, infl_model, local_model, st_model1, st_model2 = model_list
 
         # optimizer
