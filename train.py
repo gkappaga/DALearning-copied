@@ -39,7 +39,6 @@ if __name__ == "__main__":
 
         # set models
         model_list = set_models(args)
-        model_list = [m.to(DEVICE) for m in model_list]
         model, infl_model, local_model, st_model1, st_model2 = model_list
 
         # optimizer
