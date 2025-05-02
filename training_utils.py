@@ -409,7 +409,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
             # Concat outputs
             ens_tensor = torch.stack(ens_list)
-            if args.v == "EtE":
+            if args.v == "EtE" or args.v == 'LearnK':
                 loc_tensor = None
             else:
                 if args.no_localization:
@@ -565,8 +565,8 @@ def set_models(args):
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
-        st_model1   = None
-        st_model2   = None
+        st_model1   = NaiveNetwork(1)
+        st_model2   = NaiveNetwork(1)
     if args.v != 'LearnK':
         if args.no_localization or args.v == 'EtE':
             local_model = NaiveNetwork(1)
