@@ -159,6 +159,18 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # execute model
                 nn_output = model(nn_input).view(B, N, -1)
                 ens_v_a = nn_output
+            elif args.v == 'LearnK':
+                r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                obs_plus_noise = hv + r
+                nn_input = torch.cat([
+                    ens_v_f,
+                    obs_plus_noise,
+                    obs_y.expand(-1, N, -1)
+                ], dim = -1)
+                joint_flattened = nn_input.view(B, -1)
+                nn_output = model(joint_flattened)
+                K = nn_output.view(-1, args.ori_dim, args.obs_dim)
+                ens_v_a = ens_v_f + torch.bmm(ens_i, K.transpose(1, 2))
                 
 
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
@@ -378,6 +390,18 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     # execute model
                     nn_output = model(nn_input).view(B, N, -1)
                     ens_v_a = nn_output
+                elif args.v == 'LearnK':
+                    r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                    obs_plus_noise = hv + r
+                    nn_input = torch.cat([
+                        ens_v_f,
+                        obs_plus_noise,
+                        obs_y.expand(-1, N, -1)
+                    ], dim = -1)
+                    joint_flattened = nn_input.view(B, -1)
+                    nn_output = model(joint_flattened)
+                    K = nn_output.view(-1, args.ori_dim, args.obs_dim)
+                    ens_v_a = ens_v_f + torch.bmm(ens_i, K.transpose(1, 2))
                     
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
@@ -533,35 +557,46 @@ def set_models(args):
         model = Simple_MLP(d_input=args.input_dim, d_output=args.obs_dim + args.ori_dim, num_hidden_layers=2).to(args.device)
     elif args.v == 'EtE':
         model = Simple_MLP(d_input=args.input_dim, d_output=args.ori_dim, num_hidden_layers=3).to(args.device)
-    if args.no_localization or args.v == 'EtE':
+    elif args.v == 'LearnK':
+        model = Simple_MLP(
+            d_input  = args.input_dim,
+            d_output = args.output_dim,
+            num_hidden_layers=3
+        ).to(args.device)
+        infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
-    else:
-        local_model = Simple_MLP(d_input=args.local_input_dim, d_output=args.num_dist, num_hidden_layers=2).to(args.device)
-    if args.st_type == 'separate':
-        st_model1 = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
-                                    hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
-        st_model2 = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
-                                    hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
-        if args.v == 'EtE':
-            infl_model = NaiveNetwork(1)
+        st_model1   = None
+        st_model2   = None
+    if args.v != 'LearnK':
+        if args.no_localization or args.v == 'EtE':
+            local_model = NaiveNetwork(1)
         else:
-            infl_model = Simple_MLP(d_input=args.ori_dim + args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
-    elif args.st_type == 'state_only':
-        st_model1 = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
-                                    hidden_dim=args.hidden_dim, num_layers=2, freeze_WQ=not args.unfreeze_WQ).to(args.device)
-        st_model2 = NaiveNetwork(1)
-        if args.v == 'EtE':
-            infl_model = NaiveNetwork(1)
-        else:
-            infl_model = Simple_MLP(d_input=args.ori_dim + args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
-    elif args.st_type == 'joint':
-        st_model1 = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim * 2, 
-                                    hidden_dim=args.hidden_dim, num_layers=2, freeze_WQ=not args.unfreeze_WQ).to(args.device)
-        st_model2 = NaiveNetwork(1)
-        if args.v == 'EtE':
-            infl_model = NaiveNetwork(1)
-        else:
-            infl_model = Simple_MLP(d_input=args.ori_dim + 2 * args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
+            local_model = Simple_MLP(d_input=args.local_input_dim, d_output=args.num_dist, num_hidden_layers=2).to(args.device)
+        if args.st_type == 'separate':
+            st_model1 = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+            st_model2 = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+            if args.v == 'EtE':
+                infl_model = NaiveNetwork(1)
+            else:
+                infl_model = Simple_MLP(d_input=args.ori_dim + args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
+        elif args.st_type == 'state_only':
+            st_model1 = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=2, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+            st_model2 = NaiveNetwork(1)
+            if args.v == 'EtE':
+                infl_model = NaiveNetwork(1)
+            else:
+                infl_model = Simple_MLP(d_input=args.ori_dim + args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
+        elif args.st_type == 'joint':
+            st_model1 = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim * 2, 
+                                        hidden_dim=args.hidden_dim, num_layers=2, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+            st_model2 = NaiveNetwork(1)
+            if args.v == 'EtE':
+                infl_model = NaiveNetwork(1)
+            else:
+                infl_model = Simple_MLP(d_input=args.ori_dim + 2 * args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
     if args.use_data_parallel:
         model, infl_model, local_model, st_model1, st_model2 = \
             nn.DataParallel(model), nn.DataParallel(infl_model), nn.DataParallel(local_model), nn.DataParallel(st_model1), nn.DataParallel(st_model2)

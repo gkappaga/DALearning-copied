@@ -165,7 +165,7 @@ def get_parameters():
     parser.add_argument('--GPU_memory', type=int, default=16, help='GPU memory in GB')
     
     # version setting
-    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE'],
+    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE', 'LearnK'],
                         default='CorrTerms', help='versions')
 
     args = parser.parse_args()
@@ -249,21 +249,26 @@ def get_parameters():
         
     if ori_batch_size != args.batch_size:
         args.learning_rate = args.learning_rate * (args.batch_size / ori_batch_size) ** 0.5
-        
-    if args.st_type == 'state_only':
-        print("Only apply an ST on the ensemble state data.")
-        args.input_dim = args.ori_dim + 2 * args.obs_dim + args.st_output_dim
-        args.local_input_dim = args.st_output_dim
-    elif args.st_type == "separate": 
-        print("Apply STs separately on the ensemble state data and observation data.")
-        args.input_dim = args.ori_dim + 2 * args.obs_dim + args.st_output_dim * 2 
-        args.local_input_dim = args.st_output_dim * 2
-    elif args.st_type == 'joint':
-        print("Apply an ST on the joint distribution of ensemble state data and observation data.")
-        args.input_dim = args.ori_dim + 2 * args.obs_dim + args.st_output_dim * 2 
-        args.local_input_dim = args.st_output_dim * 2
-    else:
-        raise ValueError("Please use a valid st_type.")
+
+    if args.v == 'LearnK':
+        args.input_dim  = args.N * (args.ori_dim + 2*args.obs_dim)
+        args.output_dim = args.ori_dim * args.obs_dim
+    
+    if args.v != 'LearnK':   
+        if args.st_type == 'state_only':
+            print("Only apply an ST on the ensemble state data.")
+            args.input_dim = args.ori_dim + 2 * args.obs_dim + args.st_output_dim
+            args.local_input_dim = args.st_output_dim
+        elif args.st_type == "separate": 
+            print("Apply STs separately on the ensemble state data and observation data.")
+            args.input_dim = args.ori_dim + 2 * args.obs_dim + args.st_output_dim * 2 
+            args.local_input_dim = args.st_output_dim * 2
+        elif args.st_type == 'joint':
+            print("Apply an ST on the joint distribution of ensemble state data and observation data.")
+            args.input_dim = args.ori_dim + 2 * args.obs_dim + args.st_output_dim * 2 
+            args.local_input_dim = args.st_output_dim * 2
+        else:
+            raise ValueError("Please use a valid st_type.")
     
     if args.obs_in_loc:
         args.local_input_dim += args.obs_dim
