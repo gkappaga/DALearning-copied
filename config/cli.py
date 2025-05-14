@@ -165,7 +165,7 @@ def get_parameters():
     parser.add_argument('--GPU_memory', type=int, default=16, help='GPU memory in GB')
     
     # version setting
-    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE', 'LearnK'],
+    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE', 'LearnK', 'Affine'],
                         default='CorrTerms', help='versions')
 
     args = parser.parse_args()

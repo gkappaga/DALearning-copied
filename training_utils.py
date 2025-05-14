@@ -63,7 +63,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
 
             # forecast step
-            ens_v_a = ens_v_a.view(-1, args.ori_dim)
+            ens_v_a = ens_v_a.reshape(-1, args.ori_dim)
             for j in range(args.dt_iter):
                 if args.dataset == 'ks':
                     ens_v_a = forward_fun(ens_v_a, None, args.dt / args.dt_iter)
@@ -168,7 +168,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 nn_input = torch.cat([
                     s_v,
                     s_h,
-                    obs_y.squeeze(-1)
+                    obs_y.squeeze(1)
                 ], dim = -1)
                 nn_output = model(nn_input)
                 K = nn_output.view(-1, args.ori_dim, args.obs_dim)
@@ -181,15 +181,15 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 nn_input = torch.cat([
                     s_v,
                     s_h,
-                    obs_y.squeeze(-1)
+                    obs_y.squeeze(1)
                 ], dim = -1)
                 nn_output = model(nn_input).view(-1, args.output_dim)
                 A = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
                 B = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
                 Vnn2 = ens_v_f - mean_ens_v_f
                 Ynn = hv - mean_hv
-                R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
-                R = R.unsqueeze(0).expand(B, args.obs_dim, args.obs_dim)
+                R = args.sigma_y**2 * torch.eye(args.obs_dim, device=args.device)
+                R = R.unsqueeze(0).expand(ens_v_f.shape[0], args.obs_dim, args.obs_dim)
                 K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
                 K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
                 K = torch.bmm(K1, torch.inverse(K2))
@@ -197,9 +197,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 vbar = ens_v_f.mean(dim=1)
                 ybar = hv.mean(dim=1)
 
-                I     = torch.eye(d, device=args.device).unsqueeze(0).expand(B, d, d)
+                I     = torch.eye(D, device=args.device).unsqueeze(0).expand(ens_v_f.shape[0], D, D)
                 term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
-                term2 = torch.bmm(K, obs_y.unsqueeze(-1))
+                term2 = torch.bmm(K, torch.transpose(obs_y, 1, 2))
                 term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
 
                 a = term1 + term2 - term3
@@ -325,7 +325,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
 
                 # forecast step
-                ens_v_a = ens_v_a.view(-1, args.ori_dim)
+                ens_v_a = ens_v_a.reshape(-1, args.ori_dim)
                 for j in range(args.dt_iter):
                     if args.dataset == 'ks':
                         ens_v_a = forward_fun(ens_v_a, None, args.dt / args.dt_iter)
@@ -440,7 +440,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     nn_input = torch.cat([
                         s_v,
                         s_h,
-                        obs_y.squeeze(-1)
+                        obs_y.squeeze(1)
                     ], dim = -1)
                     nn_output = model(nn_input)
                     K = nn_output.view(-1, args.ori_dim, args.obs_dim)
@@ -453,15 +453,15 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     nn_input = torch.cat([
                         s_v,
                         s_h,
-                        obs_y.squeeze(-1)
+                        obs_y.squeeze(1)
                     ], dim = -1)
                     nn_output = model(nn_input).view(-1, args.output_dim)
                     A = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
                     B = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
                     Vnn2 = ens_v_f - mean_ens_v_f
                     Ynn = hv - mean_hv
-                    R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
-                    R = R.unsqueeze(0).expand(B, args.obs_dim, args.obs_dim)
+                    R = args.sigma_y**2 * torch.eye(args.obs_dim, device=args.device)
+                    R = R.unsqueeze(0).expand(ens_v_f.shape[0], args.obs_dim, args.obs_dim)
                     K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
                     K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
                     K = torch.bmm(K1, torch.inverse(K2))
@@ -469,9 +469,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     vbar = ens_v_f.mean(dim=1)
                     ybar = hv.mean(dim=1)
 
-                    I     = torch.eye(d, device=args.device).unsqueeze(0).expand(B, d, d)
+                    I     = torch.eye(D, device=args.device).unsqueeze(0).expand(ens_v_f.shape[0], D, D)
                     term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
-                    term2 = torch.bmm(K, obs_y.unsqueeze(-1))
+                    term2 = torch.bmm(K, torch.transpose(obs_y, 1, 2))
                     term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
 
                     a = term1 + term2 - term3
@@ -493,7 +493,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
             # Concat outputs
             ens_tensor = torch.stack(ens_list)
-            if args.v == "EtE" or args.v == 'LearnK':
+            if args.v == "EtE" or args.v == 'LearnK' or args.v == 'Affine':
                 loc_tensor = None
             else:
                 if args.no_localization:
@@ -649,11 +649,11 @@ def set_models(args):
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
-        st_model1   = SetTransformer(d_input=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+        st_model1   = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
-        st_model2   = SetTransformer(d_input=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+        st_model2   = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
-    if args.v != 'LearnK' or args.v != 'Affine':
+    if args.v != 'LearnK' and args.v != 'Affine':
         if args.no_localization or args.v == 'EtE':
             local_model = NaiveNetwork(1)
         else:
