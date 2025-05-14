@@ -1,3 +1,4 @@
+from typing import Set
 import numpy as np
 import time
 
@@ -162,16 +163,57 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             elif args.v == 'LearnK':
                 r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                 obs_plus_noise = hv + r
+                s_v = st_model1(ens_v_f)
+                s_h = st_model2(obs_plus_noise)
                 nn_input = torch.cat([
-                    ens_v_f,
-                    obs_plus_noise,
-                    obs_y.expand(-1, N, -1)
+                    s_v,
+                    s_h,
+                    obs_y.squeeze(-1)
                 ], dim = -1)
-                joint_flattened = nn_input.view(B, -1)
-                nn_output = model(joint_flattened)
+                nn_output = model(nn_input)
                 K = nn_output.view(-1, args.ori_dim, args.obs_dim)
                 ens_v_a = ens_v_f + torch.bmm(ens_i, K.transpose(1, 2))
-                
+            elif args.v == 'Affine':
+                r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                obs_plus_noise = hv + r
+                s_v = st_model1(ens_v_f)
+                s_h = st_model2(obs_plus_noise)
+                nn_input = torch.cat([
+                    s_v,
+                    s_h,
+                    obs_y.squeeze(-1)
+                ], dim = -1)
+                nn_output = model(nn_input).view(-1, args.output_dim)
+                A = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                B = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
+                Vnn2 = ens_v_f - mean_ens_v_f
+                Ynn = hv - mean_hv
+                R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
+                R = R.unsqueeze(0).expand(B, args.obs_dim, args.obs_dim)
+                K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
+                K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
+                K = torch.bmm(K1, torch.inverse(K2))
+
+                vbar = ens_v_f.mean(dim=1)
+                ybar = hv.mean(dim=1)
+
+                I     = torch.eye(d, device=args.device).unsqueeze(0).expand(B, d, d)
+                term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
+                term2 = torch.bmm(K, obs_y.unsqueeze(-1))
+                term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
+
+                a = term1 + term2 - term3
+                a = a.squeeze(-1)
+
+                Av = torch.bmm(A, ens_v_f.permute(0, 2, 1))
+                Av = Av.permute(0, 2, 1)
+                By = torch.bmm(B, hv.permute(0, 2, 1))
+                By = By.permute(0, 2, 1)
+
+                a_exp = a.unsqueeze(1)
+                a_exp = a_exp.expand(-1, N, -1)
+
+                ens_v_a = Av + By + a_exp
 
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
@@ -393,15 +435,57 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 elif args.v == 'LearnK':
                     r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                     obs_plus_noise = hv + r
+                    s_v = st_model1(ens_v_f)
+                    s_h = st_model2(obs_plus_noise)
                     nn_input = torch.cat([
-                        ens_v_f,
-                        obs_plus_noise,
-                        obs_y.expand(-1, N, -1)
+                        s_v,
+                        s_h,
+                        obs_y.squeeze(-1)
                     ], dim = -1)
-                    joint_flattened = nn_input.view(B, -1)
-                    nn_output = model(joint_flattened)
+                    nn_output = model(nn_input)
                     K = nn_output.view(-1, args.ori_dim, args.obs_dim)
                     ens_v_a = ens_v_f + torch.bmm(ens_i, K.transpose(1, 2))
+                elif args.v == 'Affine':
+                    r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                    obs_plus_noise = hv + r
+                    s_v = st_model1(ens_v_f)
+                    s_h = st_model2(obs_plus_noise)
+                    nn_input = torch.cat([
+                        s_v,
+                        s_h,
+                        obs_y.squeeze(-1)
+                    ], dim = -1)
+                    nn_output = model(nn_input).view(-1, args.output_dim)
+                    A = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                    B = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
+                    Vnn2 = ens_v_f - mean_ens_v_f
+                    Ynn = hv - mean_hv
+                    R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
+                    R = R.unsqueeze(0).expand(B, args.obs_dim, args.obs_dim)
+                    K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
+                    K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
+                    K = torch.bmm(K1, torch.inverse(K2))
+
+                    vbar = ens_v_f.mean(dim=1)
+                    ybar = hv.mean(dim=1)
+
+                    I     = torch.eye(d, device=args.device).unsqueeze(0).expand(B, d, d)
+                    term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
+                    term2 = torch.bmm(K, obs_y.unsqueeze(-1))
+                    term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
+
+                    a = term1 + term2 - term3
+                    a = a.squeeze(-1)
+
+                    Av = torch.bmm(A, ens_v_f.permute(0, 2, 1))
+                    Av = Av.permute(0, 2, 1)
+                    By = torch.bmm(B, hv.permute(0, 2, 1))
+                    By = By.permute(0, 2, 1)
+
+                    a_exp = a.unsqueeze(1)
+                    a_exp = a_exp.expand(-1, N, -1)
+
+                    ens_v_a = Av + By + a_exp
                     
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
@@ -557,7 +641,7 @@ def set_models(args):
         model = Simple_MLP(d_input=args.input_dim, d_output=args.obs_dim + args.ori_dim, num_hidden_layers=2).to(args.device)
     elif args.v == 'EtE':
         model = Simple_MLP(d_input=args.input_dim, d_output=args.ori_dim, num_hidden_layers=3).to(args.device)
-    elif args.v == 'LearnK':
+    elif args.v == 'LearnK' or args.v == 'Affine':
         model = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.output_dim,
@@ -565,9 +649,11 @@ def set_models(args):
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
-        st_model1   = NaiveNetwork(1)
-        st_model2   = NaiveNetwork(1)
-    if args.v != 'LearnK':
+        st_model1   = SetTransformer(d_input=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+        st_model2   = SetTransformer(d_input=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+    if args.v != 'LearnK' or args.v != 'Affine':
         if args.no_localization or args.v == 'EtE':
             local_model = NaiveNetwork(1)
         else:
