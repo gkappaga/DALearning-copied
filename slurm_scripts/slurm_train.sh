@@ -21,7 +21,5 @@
 # module load cuda/12.2  # Adjusted to CUDA version 12.2
 
 # Change to the directory containing v2_run_fine_tuning.sh
-cd ../scripts  # Assuming `scripts` folder is one level up from `slurm_script`
-
-# Run your program
+cd $HOME/gkappaga-DAlearning/scripts
 bash run_train.sh
