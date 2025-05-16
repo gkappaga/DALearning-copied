@@ -637,7 +637,7 @@ def set_models(args):
         model = Simple_MLP(d_input=args.input_dim, d_output=args.obs_dim + args.ori_dim, num_hidden_layers=2).to(args.device)
     elif args.v == 'EtE':
         model = Simple_MLP(d_input=args.input_dim, d_output=args.ori_dim, num_hidden_layers=3).to(args.device)
-    elif args.v == 'LearnK' or args.v == 'Affine':
+    elif args.v == 'Affine':
         model = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.output_dim,
@@ -649,6 +649,19 @@ def set_models(args):
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         st_model2   = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+    elif args.v == 'LearnK':
+        model = Simple_MLP(
+            d_input  = args.input_dim,
+            d_output = args.output_dim,
+            num_hidden_layers=3
+        ).to(args.device)
+        infl_model  = NaiveNetwork(1)
+        local_model = NaiveNetwork(1)
+        st_model1   = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+        st_model2   = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+
     if args.v != 'LearnK' and args.v != 'Affine':
         if args.no_localization or args.v == 'EtE':
             local_model = NaiveNetwork(1)
