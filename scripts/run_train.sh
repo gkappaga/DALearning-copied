@@ -19,7 +19,7 @@ python train.py \
     --N 10 \
     --sigma_y 1 \
     --seed 42 \
-    --v 'Affine' \
+    --v 'LearnK' \
     --epochs 50
 
 # python train.py \
