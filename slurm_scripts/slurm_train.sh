@@ -7,8 +7,8 @@
 #SBATCH --gres=gpu:4        # 4 GPUs of any type
 #SBATCH --partition=gpu     # use GPU partition
 #SBATCH --ntasks=1          # 1 task
-#SBATCH -J "bohan-gpu-LearnKalmanGain"   # job name
-#SBATCH --mail-user=bhchen@caltech.edu # email address
+#SBATCH -J "gautham-gpu-LearnAffine"   # job name
+#SBATCH --mail-user=gkappaga@caltech.edu # email address
 #SBATCH --mail-type=BEGIN   # email notification at start
 #SBATCH --mail-type=END     # email notification at end
 #SBATCH --mail-type=FAIL    # email notification on failure
@@ -24,4 +24,4 @@
 cd ../scripts  # Assuming `scripts` folder is one level up from `slurm_script`
 
 # Run your program
-bash run_enscorrection_train.sh
+bash run_train.sh
