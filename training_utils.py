@@ -163,11 +163,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             elif args.v == 'LearnK':
                 r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                 obs_plus_noise = hv + r
-                s_v = st_model1(ens_v_f)
-                s_h = st_model2(obs_plus_noise)
+                # s_v = st_model1(ens_v_f)
+                # s_h = st_model2(obs_plus_noise)
+                s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
                 nn_input = torch.cat([
-                    s_v,
-                    s_h,
+                    s_v_h,
                     obs_y.squeeze(1)
                 ], dim = -1)
                 nn_output = model(nn_input)
@@ -182,33 +182,34 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     obs_y.squeeze(1)
                 ], dim = -1)
                 nn_output = model(nn_input).view(-1, args.output_dim)
-                A = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                B = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
-                Vnn2 = ens_v_f - mean_ens_v_f
-                Ynn = hv - mean_hv
-                R = args.sigma_y**2 * torch.eye(args.obs_dim, device=args.device)
-                R = R.unsqueeze(0).expand(ens_v_f.shape[0], args.obs_dim, args.obs_dim)
-                K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
-                K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
-                K = torch.bmm(K1, torch.inverse(K2))
+                A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                B_mat = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
+                a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
+                # Vnn2 = ens_v_f - mean_ens_v_f
+                # Ynn = hv - mean_hv
+                # R = args.sigma_y**2 * torch.eye(args.obs_dim, device=args.device)
+                # R = R.unsqueeze(0).expand(ens_v_f.shape[0], args.obs_dim, args.obs_dim)
+                # K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
+                # K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
+                # K = torch.bmm(K1, torch.inverse(K2))
 
-                vbar = ens_v_f.mean(dim=1)
-                ybar = hv.mean(dim=1)
+                # vbar = ens_v_f.mean(dim=1)
+                # ybar = hv.mean(dim=1)
 
-                I     = torch.eye(D, device=args.device).unsqueeze(0).expand(ens_v_f.shape[0], D, D)
-                term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
-                term2 = torch.bmm(K, torch.transpose(obs_y, 1, 2))
-                term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
+                # I     = torch.eye(D, device=args.device).unsqueeze(0).expand(ens_v_f.shape[0], D, D)
+                # term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
+                # term2 = torch.bmm(K, torch.transpose(obs_y, 1, 2))
+                # term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
 
-                a = term1 + term2 - term3
-                a = a.squeeze(-1)
+                # a = term1 + term2 - term3
+                # a = a.squeeze(-1)
 
-                Av = torch.bmm(A, ens_v_f.permute(0, 2, 1))
+                Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
-                By = torch.bmm(B, hv.permute(0, 2, 1))
+                By = torch.bmm(B_mat, hv.permute(0, 2, 1))
                 By = By.permute(0, 2, 1)
 
-                a_exp = a.unsqueeze(1)
+                a_exp = a_vec.unsqueeze(1)
                 a_exp = a_exp.expand(-1, N, -1)
 
                 ens_v_a = Av + By + a_exp + ens_v_f
@@ -433,11 +434,11 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 elif args.v == 'LearnK':
                     r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                     obs_plus_noise = hv + r
-                    s_v = st_model1(ens_v_f)
-                    s_h = st_model2(obs_plus_noise)
+                    # s_v = st_model1(ens_v_f)
+                    # s_h = st_model2(obs_plus_noise)
+                    s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
                     nn_input = torch.cat([
-                        s_v,
-                        s_h,
+                        s_v_h,
                         obs_y.squeeze(1)
                     ], dim = -1)
                     nn_output = model(nn_input)
@@ -657,7 +658,7 @@ def set_models(args):
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
-        st_model1   = SetTransformer(input_dim=args.ori_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+        st_model1   = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         st_model2   = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
