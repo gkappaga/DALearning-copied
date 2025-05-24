@@ -183,7 +183,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 ], dim = -1)
                 nn_output = model(nn_input).view(-1, args.output_dim)
                 A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                B_mat = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
+                B_mat = nn_output[:, args.ori_dim**2:args.ori_dim**2 + args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
                 a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
                 # Vnn2 = ens_v_f - mean_ens_v_f
                 # Ynn = hv - mean_hv
@@ -454,7 +454,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     ], dim = -1)
                     nn_output = model(nn_input).view(-1, args.output_dim)
                     A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                    B_mat = nn_output[:, args.ori_dim**2:].view(B, args.ori_dim, args.obs_dim)
+                    B_mat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
                     a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
                     # Vnn2 = ens_v_f - mean_ens_v_f
                     # Ynn = hv - mean_hv
