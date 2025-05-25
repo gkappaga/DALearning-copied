@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 plot_training_curves.py
 
@@ -30,8 +31,8 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load the records
-    records = torch.load(args.input)
+    # Load the records onto CPU (no CUDA needed)
+    records = torch.load(args.input, map_location="cpu")
 
     # Expect records to be a dict with keys 'train_loss' and 'test_rmse'
     train_loss = records.get("train_loss")
