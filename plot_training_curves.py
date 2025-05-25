@@ -36,7 +36,7 @@ def main():
 
     # Expect records to be a dict with keys 'train_loss' and 'test_rmse'
     train_loss = records.get("train_loss")
-    test_rmse = records.get("test_rmse")
+    test_rmse = records.get("test_rrmse")
 
     if train_loss is None or test_rmse is None:
         raise KeyError("Expected keys 'train_loss' and 'test_rmse' in the loaded records")
