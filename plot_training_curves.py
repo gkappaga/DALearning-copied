@@ -41,7 +41,7 @@ def main():
     if train_loss is None or test_rmse is None:
         raise KeyError("Expected keys 'train_loss' and 'test_rmse' in the loaded records")
 
-    epochs = range(1, len(train_loss) + 1)
+    epochs = range(0, len(train_loss) + 1)
 
     # Plot training loss
     plt.figure()
