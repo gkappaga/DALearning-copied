@@ -79,39 +79,42 @@ def main():
     rmse_fname = make_unique_name('test_rmse_all')
 
     # --- Plot Training Loss ---
-    plt.figure(figsize=(8,6))
+    plt.figure(figsize=(12, 6))                           # wider figure
     for label, rec in all_data.items():
         plt.plot(
-            range(1, len(rec['train_loss'])+1),
+            range(1, len(rec['train_loss']) + 1),
             rec['train_loss'],
-            label=label
+            label=label,
+            linewidth=2                                  # a bit thicker lines
         )
-    plt.xlabel('Epoch')
-    plt.ylabel('Training Loss')
-    plt.title('Training Loss vs. Epoch (All Runs)')
-    plt.grid(True)
-    plt.legend(loc='upper left', bbox_to_anchor=(1.02,1))
-    plt.tight_layout(rect=[0,0,0.85,1])
-    loss_path = out_dir / loss_fname
+    plt.xlabel('Epoch', fontsize=14)
+    plt.ylabel('Training Loss', fontsize=14)
+    plt.title('Training Loss vs. Epoch (All Runs)', fontsize=16)
+    plt.grid(True, linestyle='--', alpha=0.5)             # dashed, lighter grid
+    # slimmer legend outside
+    leg = plt.legend(loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False, fontsize=12)
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
     plt.savefig(loss_path, dpi=300)
-    print(f"Saved combined training loss plot to {loss_path}")
+    plt.close()
 
     # --- Plot Test RMSE ---
-    plt.figure(figsize=(8,6))
+    plt.figure(figsize=(12, 6))
     for label, rec in all_data.items():
         plt.plot(
-            range(1, len(rec['test_rmse'])+1),
+            range(1, len(rec['test_rmse']) + 1),
             rec['test_rmse'],
-            label=label
+            label=label,
+            linewidth=2
         )
-    plt.xlabel('Epoch')
-    plt.ylabel('Test RMSE')
-    plt.title('Test RMSE vs. Epoch (All Runs)')
-    plt.grid(True)
-    plt.legend(loc='upper left', bbox_to_anchor=(1.02,1))
-    plt.tight_layout(rect=[0,0,0.85,1])
-    rmse_path = out_dir / rmse_fname
+    plt.xlabel('Epoch', fontsize=14)
+    plt.ylabel('Test RMSE', fontsize=14)
+    plt.title('Test RMSE vs. Epoch (All Runs)', fontsize=16)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    leg = plt.legend(loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False, fontsize=12)
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
     plt.savefig(rmse_path, dpi=300)
+    plt.close()
+
     print(f"Saved combined test RMSE plot to {rmse_path}")
 
 if __name__ == '__main__':
