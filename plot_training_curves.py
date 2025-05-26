@@ -2,12 +2,13 @@
 """
 plot_training_curves.py
 
-Loads training records (saved as a .pt file) and produces:
+Loads one or more training record files (.pt) and produces combined:
   1) Training loss vs. epoch
   2) Test RMSE vs. epoch
 
 Usage:
-  python plot_training_curves.py --input training_records.pt
+  python plot_training_curves.py --input save/.../run1/training_records.pt save/.../run2/training_records.pt \
+      --output_dir figures
 """
 
 import argparse
@@ -15,57 +16,82 @@ import torch
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+def extract_label(path_str):
+    # Use the parent directory name as the legend label
+    return Path(path_str).parent.name
+
+def load_records(paths):
+    data = {}
+    for p in paths:
+        records = torch.load(p, map_location='cpu')
+        train_loss = records.get('train_loss')
+        test_rmse = records.get('test_rmse')
+        if train_loss is None or test_rmse is None:
+            raise KeyError(f"Expected keys 'train_loss' and 'test_rmse' in {p}")
+        label = extract_label(p)
+        data[label] = {
+            'train_loss': train_loss,
+            'test_rmse': test_rmse
+        }
+    return data
+
 def main():
-    parser = argparse.ArgumentParser(description="Plot training curves")
+    parser = argparse.ArgumentParser(description="Plot combined training curves")
     parser.add_argument(
-        "--input",
+        '--input',
         type=str,
-        default="training_records.pt",
-        help="Path to the .pt file containing training records"
+        nargs='+',
+        required=True,
+        help='One or more paths to training_records.pt files'
     )
     parser.add_argument(
-        "--output_dir",
+        '--output_dir',
         type=str,
-        default=".",
-        help="Directory to save the plots"
+        default='.',
+        help='Directory to save the combined plots'
     )
     args = parser.parse_args()
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load the records onto CPU (no CUDA needed)
-    records = torch.load(args.input, map_location="cpu")
-
-    # Expect records to be a dict with keys 'train_loss' and 'test_rmse'
-    train_loss = records.get("train_loss")
-    test_rmse = records.get("test_rrmse")
-
-    if train_loss is None or test_rmse is None:
-        raise KeyError("Expected keys 'train_loss' and 'test_rmse' in the loaded records")
-
-    epochs = range(1, len(train_loss) + 1)
+    all_data = load_records(args.input)
 
     # Plot training loss
-    plt.figure()
-    plt.plot(epochs, train_loss)
-    plt.xlabel("Epoch")
-    plt.ylabel("Training Loss")
-    plt.title("Training Loss vs. Epoch")
+    plt.figure(figsize=(8,6))
+    for label, rec in all_data.items():
+        plt.plot(
+            range(1, len(rec['train_loss']) + 1),
+            rec['train_loss'],
+            label=label
+        )
+    plt.xlabel('Epoch')
+    plt.ylabel('Training Loss')
+    plt.title('Training Loss vs. Epoch (All Runs)')
     plt.grid(True)
-    plt.tight_layout()
-    loss_path = Path(args.output_dir) / "training_loss_curve.png"
-    plt.savefig(loss_path)
-    print(f"Saved training loss curve to {loss_path}")
-    epochs = range(1, len(test_rmse) + 1)
-    # Plot test RMSE
-    plt.figure()
-    plt.plot(epochs, test_rmse)
-    plt.xlabel("Epoch")
-    plt.ylabel("Test RMSE")
-    plt.title("Test RMSE vs. Epoch")
-    plt.grid(True)
-    plt.tight_layout()
-    rmse_path = Path(args.output_dir) / "test_rmse_curve.png"
-    plt.savefig(rmse_path)
-    print(f"Saved test RMSE curve to {rmse_path}")
+    # place legend outside to the right
+    plt.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+    plt.tight_layout(rect=[0, 0, 0.85, 1])  # leave space on right for legend
+    loss_path = out_dir / 'training_loss_all.png'
+    plt.savefig(loss_path, dpi=300)
+    print(f"Saved combined training loss plot to {loss_path}")
 
-if __name__ == "__main__":
+    # Plot test RMSE
+    plt.figure(figsize=(8,6))
+    for label, rec in all_data.items():
+        plt.plot(
+            range(1, len(rec['test_rmse']) + 1),
+            rec['test_rmse'],
+            label=label
+        )
+    plt.xlabel('Epoch')
+    plt.ylabel('Test RMSE')
+    plt.title('Test RMSE vs. Epoch (All Runs)')
+    plt.grid(True)
+    plt.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+    plt.tight_layout(rect=[0, 0, 0.85, 1])
+    rmse_path = out_dir / 'test_rmse_all.png'
+    plt.savefig(rmse_path, dpi=300)
+    print(f"Saved combined test RMSE plot to {rmse_path}")
+
+if __name__ == '__main__':
     main()
