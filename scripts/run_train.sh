@@ -20,7 +20,7 @@ python train.py \
     --sigma_y 1 \
     --seed 42 \
     --v 'LearnK' \
-    --epochs 50 \
+    --epochs 500 \
     --save_epoch 1
 
 python train.py \
@@ -29,7 +29,7 @@ python train.py \
     --sigma_y 1 \
     --seed 42 \
     --v 'Affine' \
-    --epochs 50 \
+    --epochs 500 \
     --save_epoch 1
 
 # python train.py \
