@@ -52,13 +52,13 @@ def load_records(paths):
             k for k, v in recs.items()
             if hasattr(v, "__len__") and not isinstance(v, (str, bytes))
         ]
-        if "train_loss" in recs and "test_rmse" in recs:
+        if "train_loss" in recs and "test_rrmse" in recs:
             train_loss = recs["train_loss"]
-            test_rmse  = recs["test_rmse"]
+            test_rmse  = recs["test_rrmse"]
         elif len(seq_keys) >= 2:
             train_loss = recs[seq_keys[0]]
             test_rmse  = recs[seq_keys[1]]
-            print(f"Auto-detected keys for {p}: train_loss←'{seq_keys[0]}', test_rmse←'{seq_keys[1]}'")
+            print(f"Auto-detected keys for {p}: train_loss←'{seq_keys[0]}', test_rrmse←'{seq_keys[1]}'")
         else:
             raise KeyError(
                 f"Could not find train_loss/test_rmse in {p}; available keys: {list(recs.keys())}"
@@ -66,15 +66,15 @@ def load_records(paths):
         label = extract_label(p)
         data[label] = {
             "train_loss": train_loss,
-            "test_rmse": test_rmse
+            "test_rrmse": test_rmse
         }
     return data
 
 def plot_and_save(all_data, series_key, ylabel, title, out_path):
     """
     Generic plotting routine:
-      - all_data: dict of { label: { 'train_loss': [...], 'test_rmse': [...] } }
-      - series_key: either 'train_loss' or 'test_rmse'
+      - all_data: dict of { label: { 'train_loss': [...], 'test_rrmse': [...] } }
+      - series_key: either 'train_loss' or 'test_rrmse'
       - ylabel/title: axis label and title
       - out_path: Path where to save
     """
@@ -123,7 +123,7 @@ def main():
 
     # Generate timestamped filenames
     loss_file = out_dir / make_unique_name("training_loss_all")
-    rmse_file = out_dir / make_unique_name("test_rmse_all")
+    rmse_file = out_dir / make_unique_name("test_rrmse_all")
 
     # Plot training loss
     plot_and_save(
@@ -137,9 +137,9 @@ def main():
     # Plot test RMSE
     plot_and_save(
         all_data,
-        series_key="test_rmse",
-        ylabel="Test RMSE",
-        title="Test RMSE vs. Epoch (All Runs)",
+        series_key="test_rrmse",
+        ylabel="Test RRMSE",
+        title="Test RRMSE vs. Epoch (All Runs)",
         out_path=rmse_file
     )
 
