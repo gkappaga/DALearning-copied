@@ -182,8 +182,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     obs_y.squeeze(1)
                 ], dim = -1)
                 nn_output = model(nn_input).view(-1, args.output_dim)
-                A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                B_mat = nn_output[:, args.ori_dim**2:args.ori_dim**2 + args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
+                # A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                B_mat = nn_output[:, args.ori_dim*args.obs_dim:].view(B, args.ori_dim, args.obs_dim)
                 a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
                 # Vnn2 = ens_v_f - mean_ens_v_f
                 # Ynn = hv - mean_hv
@@ -203,6 +203,42 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
                 # a = term1 + term2 - term3
                 # a = a.squeeze(-1)
+
+                mean_vf = ens_v_f.mean(dim=1, keepdim=True)          # (B, 1, D)
+                mean_hv = hv.mean(dim=1, keepdim=True)                # (B, 1, d)
+
+                # zero‐mean perturbations
+                Vp = ens_v_f - mean_vf                                 # (B, N, D)
+                Hp = hv      - mean_hv
+
+                Cvv = torch.bmm(Vp, Vp.transpose(1, 2)) / (N - 1)
+                Cyy = torch.bmm(Hp, Hp.transpose(1, 2)) / (N - 1) #+ args.sigma_y**2 * torch.eye(d, device=args.device).unsqueeze(0)
+                Cvy = torch.bmm(Vp, Hp.transpose(1, 2)) / (N - 1)
+                Cyv = Cvy.transpose(1, 2)
+
+                Cyy_inv = torch.inverse(Cyy)
+                temp = torch.bmm( Cvy, torch.bmm(Cyy_inv, Cyv) )
+                C_tilde = Cyy - temp
+
+                C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cvy.transpose(1, 2)))
+
+                Cprime = C - torch.bmm(B_mat, torch.bmm(C_tilde, B_mat.transpose(1, 2)))
+
+                eigvals, U = torch.linalg.eigh(Cprime)                       # eigvals: (B, D),  U: (B, D, D)
+
+                # Make sure eigenvalues are nonnegative (clamp in case of tiny negative numerical noise)
+                eigvals_clamped = torch.clamp(eigvals, min=0.0)         # (B, D)
+
+                # Form Σ = diag( sqrt(λ) )
+                Sigma = torch.diag_embed( torch.sqrt(eigvals_clamped) )
+
+                eigvals, eigvecs = torch.linalg.eigh(C_tilde)
+                sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
+                Ctil_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
+
+                F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
+
+                A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv))
 
                 Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
@@ -454,8 +490,8 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         obs_y.squeeze(1)
                     ], dim = -1)
                     nn_output = model(nn_input).view(-1, args.output_dim)
-                    A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                    B_mat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
+                    # A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                    B_mat = nn_output[:, args.ori_dim*args.obs_dim:].view(B, args.ori_dim, args.obs_dim)
                     a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
                     # Vnn2 = ens_v_f - mean_ens_v_f
                     # Ynn = hv - mean_hv
@@ -475,6 +511,42 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                     # a = term1 + term2 - term3
                     # a = a.squeeze(-1)
+
+                    mean_vf = ens_v_f.mean(dim=1, keepdim=True)          # (B, 1, D)
+                    mean_hv = hv.mean(dim=1, keepdim=True)                # (B, 1, d)
+
+                    # zero‐mean perturbations
+                    Vp = ens_v_f - mean_vf                                 # (B, N, D)
+                    Hp = hv      - mean_hv
+
+                    Cvv = torch.bmm(Vp, Vp.transpose(1, 2)) / (N - 1)
+                    Cyy = torch.bmm(Hp, Hp.transpose(1, 2)) / (N - 1) #+ args.sigma_y**2 * torch.eye(d, device=args.device).unsqueeze(0)
+                    Cvy = torch.bmm(Vp, Hp.transpose(1, 2)) / (N - 1)
+                    Cyv = Cvy.transpose(1, 2)
+
+                    Cyy_inv = torch.inverse(Cyy)
+                    temp = torch.bmm( Cvy, torch.bmm(Cyy_inv, Cyv) )
+                    C_tilde = Cyy - temp
+
+                    C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cvy.transpose(1, 2)))
+
+                    Cprime = C - torch.bmm(B_mat, torch.bmm(C_tilde, B_mat.transpose(1, 2)))
+
+                    eigvals, U = torch.linalg.eigh(Cprime)                       # eigvals: (B, D),  U: (B, D, D)
+
+                    # Make sure eigenvalues are nonnegative (clamp in case of tiny negative numerical noise)
+                    eigvals_clamped = torch.clamp(eigvals, min=0.0)         # (B, D)
+
+                    # Form Σ = diag( sqrt(λ) )
+                    Sigma = torch.diag_embed( torch.sqrt(eigvals_clamped) )
+
+                    eigvals, eigvecs = torch.linalg.eigh(C_tilde)
+                    sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
+                    Ctil_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
+
+                    F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
+
+                    A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv))
 
                     Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                     Av = Av.permute(0, 2, 1)
