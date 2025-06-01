@@ -14,14 +14,14 @@ cd ..
 #     --sigma_y 0.7 \
 #     --seed 42 
 
-python train.py \
-    --dataset lorenz96 \
-    --N 10 \
-    --sigma_y 1 \
-    --seed 42 \
-    --v 'LearnK' \
-    --epochs 500 \
-    --save_epoch 1
+# python train.py \
+#     --dataset lorenz96 \
+#     --N 10 \
+#     --sigma_y 1 \
+#     --seed 42 \
+#     --v 'LearnK' \
+#     --epochs 500 \
+#     --save_epoch 50
 
 python train.py \
     --dataset lorenz96 \
@@ -30,7 +30,7 @@ python train.py \
     --seed 42 \
     --v 'Affine' \
     --epochs 500 \
-    --save_epoch 1
+    --save_epoch 50
 
 # python train.py \
 #     --dataset lorenz96 \
