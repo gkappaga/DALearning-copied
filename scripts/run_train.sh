@@ -29,8 +29,8 @@ python train.py \
     --sigma_y 1 \
     --seed 42 \
     --v 'Affine' \
-    --epochs 500 \
-    --save_epoch 50
+    --epochs 10 \
+    --save_epoch 10
 
 # python train.py \
 #     --dataset lorenz96 \
