@@ -238,7 +238,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
                 Ctil_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
 
-                F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
+                temp = torch.bmm(U, Sigma)
+                temp = torch.bmm(temp, U.transpose(-2, -1))
+                F = torch.bmm(temp, Ctil_half)
+
+                # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
 
                 A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv))
 
@@ -548,7 +552,11 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
                     Ctil_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
 
-                    F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
+                    temp = torch.bmm(U, Sigma)
+                    temp = torch.bmm(temp, U.transpose(-2, -1))
+                    F = torch.bmm(temp, Ctil_half)
+
+                    # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
 
                     A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv))
 
