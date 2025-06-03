@@ -225,7 +225,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
                 C_tilde = Cyy - temp
 
-                Cyy_inv = torch.inverse(Cyy)
+                Cyy_jittered = Cyy + eps * torch.eye(d, device=Cyy.device).unsqueeze(0)
+                Cyy_inv = torch.inverse(Cyy_jittered)
 
                 C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cyv))
 
@@ -543,8 +544,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     Cvv_inv = torch.inverse(Cvv_jittered)
                     temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
                     C_tilde = Cyy - temp
-
-                    Cyy_inv = torch.inverse(Cyy)
+                    
+                    Cyy_jittered = Cyy + eps * torch.eye(d, device=Cyy.device).unsqueeze(0)
+                    Cyy_inv = torch.inverse(Cyy_jittered)
 
                     C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cyv))
 
