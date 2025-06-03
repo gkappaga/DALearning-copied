@@ -250,7 +250,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
                 # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
 
-                A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv))
+                A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv_jittered))
 
                 Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
@@ -570,7 +570,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                     # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
 
-                    A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv))
+                    A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv_jittered))
 
                     Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                     Av = Av.permute(0, 2, 1)
