@@ -216,11 +216,13 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
                 Cyv = Cvy.transpose(1, 2)
 
-                Cyy_inv = torch.inverse(Cyy)
-                temp = torch.bmm( Cvy, torch.bmm(Cyy_inv, Cyv) )
+                Cvv_inv = torch.inverse(Cvv)
+                temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
                 C_tilde = Cyy - temp
 
-                C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cvy.transpose(1, 2)))
+                Cyy_inv = torch.inverse(Cyy)
+
+                C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cyv))
 
                 Cprime = C - torch.bmm(B_mat, torch.bmm(C_tilde, B_mat.transpose(1, 2)))
 
@@ -524,11 +526,13 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
                     Cyv = Cvy.transpose(1, 2)
 
-                    Cyy_inv = torch.inverse(Cyy)
-                    temp = torch.bmm( Cvy, torch.bmm(Cyy_inv, Cyv) )
+                    Cvv_inv = torch.inverse(Cvv)
+                    temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
                     C_tilde = Cyy - temp
 
-                    C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cvy.transpose(1, 2)))
+                    Cyy_inv = torch.inverse(Cyy)
+
+                    C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cyv))
 
                     Cprime = C - torch.bmm(B_mat, torch.bmm(C_tilde, B_mat.transpose(1, 2)))
 
