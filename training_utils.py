@@ -234,13 +234,13 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # Form Σ = diag( sqrt(λ) )
                 Sigma = torch.diag_embed( torch.sqrt(eigvals_clamped) )
 
-                eigvals, eigvecs = torch.linalg.eigh(C_tilde)
+                eigvals, eigvecs = torch.linalg.eigh(Cvv)
                 sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
-                Ctil_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
+                Cvv_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
 
                 temp = torch.bmm(U, Sigma)
                 temp = torch.bmm(temp, U.transpose(-2, -1))
-                F = torch.bmm(temp, Ctil_half)
+                F = torch.bmm(temp, Cvv_half)
 
                 # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
 
@@ -548,13 +548,13 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     # Form Σ = diag( sqrt(λ) )
                     Sigma = torch.diag_embed( torch.sqrt(eigvals_clamped) )
 
-                    eigvals, eigvecs = torch.linalg.eigh(C_tilde)
+                    eigvals, eigvecs = torch.linalg.eigh(Cvv)
                     sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
-                    Ctil_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
+                    Cvv_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
 
                     temp = torch.bmm(U, Sigma)
                     temp = torch.bmm(temp, U.transpose(-2, -1))
-                    F = torch.bmm(temp, Ctil_half)
+                    F = torch.bmm(temp, Cvv_half)
 
                     # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
 
