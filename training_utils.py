@@ -521,7 +521,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                     Cvv = torch.bmm(Vp, Vp.transpose(1, 2)) / (N - 1)
                     Cyy = torch.bmm(Hp, Hp.transpose(1, 2)) / (N - 1) #+ args.sigma_y**2 * torch.eye(d, device=args.device).unsqueeze(0)
-                    Cvy = torch.bmm(Vp, Hp.transpose(1, 2)) / (N - 1)
+                    Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
                     Cyv = Cvy.transpose(1, 2)
 
                     Cyy_inv = torch.inverse(Cyy)
