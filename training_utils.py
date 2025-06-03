@@ -216,8 +216,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
                 Cyv = Cvy.transpose(1, 2)
 
-                Cvv_inv = torch.inverse(Cvv)
-                temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
+                # Cvv_inv = torch.inverse(Cvv)
+                # temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
 
                 eps = 1e-6
                 Cvv_jittered = Cvv + eps * torch.eye(D, device=Cvv.device).unsqueeze(0)
@@ -535,8 +535,8 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
                     Cyv = Cvy.transpose(1, 2)
 
-                    Cvv_inv = torch.inverse(Cvv)
-                    temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
+                    # Cvv_inv = torch.inverse(Cvv)
+                    # temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
 
                     eps = 1e-6
                     Cvv_jittered = Cvv + eps * torch.eye(D, device=Cvv.device).unsqueeze(0)
