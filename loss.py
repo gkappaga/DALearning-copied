@@ -361,7 +361,7 @@ def compute_loss_last(
 
         # add squared‐error of means
         mean_diff = m_th - m_nn                                # (B,D)
-        mean_penalty = mean_diff/torch.norm(m_th, p = 2, dim = 1)
+        mean_penalty = torch.norm(mean_diff, p=2, dim =1)/torch.norm(m_th, p = 2, dim = 1)
         L = L + lambda1 * mean_penalty   # add L2 norm
 
     # 5) If desired, analytic vs learned covariance matching
@@ -389,15 +389,20 @@ def compute_loss_last(
         # True covariance
         Cov_true = Cvv - torch.bmm(Cvy, Cyy_inv).bmm(Cvy.transpose(-2,-1))
         cov_diff = Cov_pred - Cov_true               # (B,D,D)
-        cov_fro  = torch.norm(cov_diff)  # (B,)
-        cov_penalty = cov_fro / torch.norm(Cov_true, p='fro', dim=(1,2))  # (B,)
-        L = L + lambda2 * cov_penalty
+        cov_err_vec = torch.norm(cov_diff.reshape(B, -1), p=2, dim=1)  # → (B,)
+
+        # 2) per‐batch norm of the true covariance
+        true_cov_norm = torch.norm(Cov_true.reshape(B, -1), p=2, dim=1).clamp(min=1e-8)  # → (B,)
+
+        # 3) form a *relative* covariance penalty in [0, ∞)
+        cov_pen_vec = cov_err_vec / true_cov_norm    # → (B,)
+        L = L + lambda2 * cov_pen_vec
 
     # 6) Mask and reduce over batch
     L_valid = L[mask]
     if L_valid.numel() == 0:
         return torch.tensor(0.0, requires_grad=True)
-    return L_valid.sum(), mean_penalty.sum(), cov_penalty.sum() if return_sum else L_valid.mean(), mean_penalty.mean(), cov_penalty.mean()
+    return L_valid.sum(), mean_penalty.sum(), cov_pen_vec.sum() if return_sum else L_valid.mean(), mean_penalty.mean(), cov_pen_vec.mean()
 
 
 
