@@ -222,7 +222,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
             ens_list.append(ens_v_a)
             if args.mc_penalty:
-                nan_mask = torch.isnan(ens_tensor).any(dim=(0, 2, 3))  
+                nan_mask = torch.isnan(ens_v_a).any(dim=(0, 2, 3))  
                 valid_B_mask = ~nan_mask
                 step_loss = compute_loss_last(ens_tensor = ens_v_a,
                                             true_v = batch_v[i + 1],
