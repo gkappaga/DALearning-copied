@@ -344,7 +344,7 @@ def compute_loss_last(
         Cvy = torch.bmm(Vp.transpose(1,2), Hp)/(N-1)   # (B,D,d)
 
         # Invert Cyy safely
-        eps = getattr(args, "cov_eps", 1e-6)
+        eps = getattr(args, "cov_eps", 1e-3)
         Cyy_j = Cyy + eps * torch.eye(Cyy.shape[-1], device = args.device).unsqueeze(0)
         Cyy_inv = torch.inverse(Cyy_j)
 
