@@ -361,7 +361,8 @@ def compute_loss_last(
 
         # add squared‐error of means
         mean_diff = m_th - m_nn                                # (B,D)
-        L = L + lambda1 * torch.norm(mean_diff)    # add L2 norm
+        mean_penalty = mean_diff/torch.norm(m_th, p = 2, dim = 1)
+        L = L + lambda1 * mean_penalty   # add L2 norm
 
     # 5) If desired, analytic vs learned covariance matching
     if lambda2 > 0.0:
@@ -389,7 +390,8 @@ def compute_loss_last(
         Cov_true = Cvv - torch.bmm(Cvy, Cyy_inv).bmm(Cvy.transpose(-2,-1))
         cov_diff = Cov_pred - Cov_true               # (B,D,D)
         cov_fro  = torch.norm(cov_diff)  # (B,)
-        L = L + lambda2 * cov_fro
+        cov_penalty = cov_fro / torch.norm(Cov_true, p='fro', dim=(1,2))  # (B,)
+        L = L + lambda2 * cov_penalty
 
     # 6) Mask and reduce over batch
     L_valid = L[mask]
