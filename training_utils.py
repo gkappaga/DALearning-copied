@@ -10,7 +10,7 @@ from utils import AverageMeter, mystery_operator, get_mean_std
 from utils import plot_particle_trajectories_with_histograms
 from EnKF_utils import loc_EnKF_analysis, EnKF_analysis, post_process, mean0
 from localization import dist2coeff, create_loc_mat
-from loss import compute_loss, compute_es
+from loss import compute_loss, compute_es, compute_loss_last
 from networks import NaiveNetwork, SetTransformer, Simple_MLP
 
 def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=None):
@@ -56,6 +56,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             end_ind = np.minimum(epoch + 1, len(batch_v) - 1)
         else:
             end_ind = len(batch_v) - 1
+
+        if args.mc_penalty:
+            loss = torch.zeros((), device=args.device)
         
         for i in range(end_ind):
             # get next observation
@@ -182,8 +185,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     obs_y.squeeze(1)
                 ], dim = -1)
                 nn_output = model(nn_input).view(-1, args.output_dim)
-                # A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                B_mat = nn_output[:, :args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
+                A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                B_mat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
                 a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
                 # Vnn2 = ens_v_f - mean_ens_v_f
                 # Ynn = hv - mean_hv
@@ -204,54 +207,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # a = term1 + term2 - term3
                 # a = a.squeeze(-1)
 
-                mean_vf = ens_v_f.mean(dim=1, keepdim=True)          # (B, 1, D)
-                mean_hv = hv.mean(dim=1, keepdim=True)                # (B, 1, d)
-
-                # zero‐mean perturbations
-                Vp = ens_v_f - mean_vf                                 # (B, N, D)
-                Hp = hv      - mean_hv
-
-                Cvv = torch.bmm(Vp.transpose(1, 2), Vp) / (N - 1)
-                Cyy = torch.bmm(Hp.transpose(1, 2), Hp) / (N - 1) #+ args.sigma_y**2 * torch.eye(d, device=args.device).unsqueeze(0)
-                Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
-                Cyv = Cvy.transpose(1, 2)
-
-                # Cvv_inv = torch.inverse(Cvv)
-                # temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
-
-                eps = 1e-6
-                Cvv_jittered = Cvv + eps * torch.eye(D, device=Cvv.device).unsqueeze(0)
-                Cvv_inv = torch.inverse(Cvv_jittered)
-                temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
-                C_tilde = Cyy - temp
-
-                Cyy_jittered = Cyy + eps * torch.eye(d, device=Cyy.device).unsqueeze(0)
-                Cyy_inv = torch.inverse(Cyy_jittered)
-
-                C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cyv))
-
-                Cprime = C - torch.bmm(B_mat, torch.bmm(C_tilde, B_mat.transpose(1, 2)))
-
-                eigvals, U = torch.linalg.eigh(Cprime)                       # eigvals: (B, D),  U: (B, D, D)
-
-                # Make sure eigenvalues are nonnegative (clamp in case of tiny negative numerical noise)
-                eigvals_clamped = torch.clamp(eigvals, min=0.0)         # (B, D)
-
-                # Form Σ = diag( sqrt(λ) )
-                Sigma = torch.diag_embed( torch.sqrt(eigvals_clamped) )
-
-                eigvals, eigvecs = torch.linalg.eigh(Cvv)
-                sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
-                Cvv_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
-
-                temp = torch.bmm(U, Sigma)
-                temp = torch.bmm(temp, U.transpose(-2, -1))
-                F = torch.bmm(temp, Cvv_half)
-
-                # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
-
-                A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv_jittered))
-
                 Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
                 obs_plus_noise = hv + r
@@ -266,6 +221,23 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
             ens_list.append(ens_v_a)
+            if args.mc_penalty:
+                nan_mask = torch.isnan(ens_tensor).any(dim=(0, 2, 3))  
+                valid_B_mask = ~nan_mask
+                step_loss = compute_loss_last(ens_tensor = ens_v_a,
+                                            true_v = batch_v[i + 1],
+                                            loss_type=args.loss_type,
+                                            valid_B_mask=valid_B_mask,
+                                            norm_p = args.es_p,
+                                            kes_sigma = args.kes_sigma,
+                                            H_info=H_info,
+                                            A = A_mat,
+                                            B = B_mat,
+                                            a = a_vec,
+                                            args = args,
+                                            lambda1 = args.lambda1,
+                                            lambda2 = args.lambda2,)
+                loss = loss + step_loss
             
             if epoch <= args.detach_training_epoch:
                 ens_v_a = ens_v_a.detach()
@@ -287,28 +259,52 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         valid_B_mask = ~nan_mask
 
         # loss
-        if not valid_B_mask.any():
-            num_all_nan_batch += 1
+        if not args.mc_penalty:
+            if not valid_B_mask.any():
+                num_all_nan_batch += 1
+            else:
+                loss = 0
+                for loss_type in args.loss_type:
+                    loss += compute_loss(ens_tensor=ens_tensor, 
+                                        batch_v=batch_v, 
+                                        loss_type=loss_type, 
+                                        ignore_first=ignore_first, 
+                                        end_ind=None, 
+                                        valid_B_mask=valid_B_mask,
+                                        norm_p=args.es_p,
+                                        kes_sigma=args.kes_sigma)
+
+                success_count += torch.sum(valid_B_mask)
+                
+                losses.update(loss.item(), torch.sum(valid_B_mask))
+
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
         else:
-            loss = 0
-            for loss_type in args.loss_type:
-                loss += compute_loss(ens_tensor=ens_tensor, 
-                                    batch_v=batch_v, 
-                                    loss_type=loss_type, 
-                                    ignore_first=ignore_first, 
-                                    end_ind=None, 
-                                    valid_B_mask=valid_B_mask,
-                                    norm_p=args.es_p,
-                                    kes_sigma=args.kes_sigma)
+            if not valid_B_mask.any():
+                num_all_nan_batch += 1
+            else:
+                # loss = 0
+                # for loss_type in args.loss_type:
+                #     loss += compute_loss(ens_tensor=ens_tensor, 
+                #                         batch_v=batch_v, 
+                #                         loss_type=loss_type, 
+                #                         ignore_first=ignore_first, 
+                #                         end_ind=None, 
+                #                         valid_B_mask=valid_B_mask,
+                #                         norm_p=args.es_p,
+                #                         kes_sigma=args.kes_sigma)
 
-            success_count += torch.sum(valid_B_mask)
-            
-            losses.update(loss.item(), torch.sum(valid_B_mask))
+                success_count += torch.sum(valid_B_mask)
+                
+                losses.update(loss.item(), torch.sum(valid_B_mask))
 
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
         
         total_count += batch_v.shape[1]
 
@@ -502,75 +498,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         obs_y.squeeze(1)
                     ], dim = -1)
                     nn_output = model(nn_input).view(-1, args.output_dim)
-                    # A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                    B_mat = nn_output[:, :args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
+                    A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
+                    B_mat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
                     a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
-                    # Vnn2 = ens_v_f - mean_ens_v_f
-                    # Ynn = hv - mean_hv
-                    # R = args.sigma_y**2 * torch.eye(args.obs_dim, device=args.device)
-                    # R = R.unsqueeze(0).expand(ens_v_f.shape[0], args.obs_dim, args.obs_dim)
-                    # K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
-                    # K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
-                    # K = torch.bmm(K1, torch.inverse(K2))
-
-                    # vbar = ens_v_f.mean(dim=1)
-                    # ybar = hv.mean(dim=1)
-
-                    # I     = torch.eye(D, device=args.device).unsqueeze(0).expand(ens_v_f.shape[0], D, D)
-                    # term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
-                    # term2 = torch.bmm(K, torch.transpose(obs_y, 1, 2))
-                    # term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
-
-                    # a = term1 + term2 - term3
-                    # a = a.squeeze(-1)
-
-                    mean_vf = ens_v_f.mean(dim=1, keepdim=True)          # (B, 1, D)
-                    mean_hv = hv.mean(dim=1, keepdim=True)                # (B, 1, d)
-
-                    # zero‐mean perturbations
-                    Vp = ens_v_f - mean_vf                                 # (B, N, D)
-                    Hp = hv      - mean_hv
-
-                    Cvv = torch.bmm(Vp.transpose(1, 2), Vp) / (N - 1)
-                    Cyy = torch.bmm(Hp.transpose(1, 2), Hp) / (N - 1) #+ args.sigma_y**2 * torch.eye(d, device=args.device).unsqueeze(0)
-                    Cvy = torch.bmm(Vp.transpose(1, 2), Hp) / (N - 1)
-                    Cyv = Cvy.transpose(1, 2)
-
-                    # Cvv_inv = torch.inverse(Cvv)
-                    # temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
-
-                    eps = 1e-6
-                    Cvv_jittered = Cvv + eps * torch.eye(D, device=Cvv.device).unsqueeze(0)
-                    Cvv_inv = torch.inverse(Cvv_jittered)
-                    temp = torch.bmm(Cyv, torch.bmm(Cvv_inv, Cvy) )
-                    C_tilde = Cyy - temp
-                    
-                    Cyy_jittered = Cyy + eps * torch.eye(d, device=Cyy.device).unsqueeze(0)
-                    Cyy_inv = torch.inverse(Cyy_jittered)
-
-                    C = Cvv - torch.bmm(Cvy, torch.bmm(Cyy_inv, Cyv))
-
-                    Cprime = C - torch.bmm(B_mat, torch.bmm(C_tilde, B_mat.transpose(1, 2)))
-
-                    eigvals, U = torch.linalg.eigh(Cprime)                       # eigvals: (B, D),  U: (B, D, D)
-
-                    # Make sure eigenvalues are nonnegative (clamp in case of tiny negative numerical noise)
-                    eigvals_clamped = torch.clamp(eigvals, min=0.0)         # (B, D)
-
-                    # Form Σ = diag( sqrt(λ) )
-                    Sigma = torch.diag_embed( torch.sqrt(eigvals_clamped) )
-
-                    eigvals, eigvecs = torch.linalg.eigh(Cvv)
-                    sqrt_diag = torch.diag_embed(torch.sqrt(torch.clamp(eigvals, min=0.0)))
-                    Cvv_half = eigvecs @ sqrt_diag @ eigvecs.transpose(-2, -1)
-
-                    temp = torch.bmm(U, Sigma)
-                    temp = torch.bmm(temp, U.transpose(-2, -1))
-                    F = torch.bmm(temp, Cvv_half)
-
-                    # F = torch.bmm(torch.bmm(torch.bmm(U, Sigma), U.transpose(-2, -1)), Ctil_half)
-
-                    A_mat = torch.bmm((F - torch.bmm(B_mat, Cvy.transpose(1, 2))), torch.inverse(Cvv_jittered))
 
                     Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                     Av = Av.permute(0, 2, 1)

@@ -86,6 +86,9 @@ def get_parameters():
     parser.add_argument('--kes_sigma', type=lambda x: float(x) if x.lower() != 'none' else None,
                     default=1e-2,
                     help='the power of energy score (can be float or None)')
+    parser.add_argument('--mc_penalty', type=bool, default=False, help='whether to use mean, covariance matching')
+    parser.add_argument('--lambda1', type=float, default=0.0, help = 'Weight for mean penalty')
+    parser.add_argument('--lambda2', type=float, default=0.0, help='Weight for covariance penalty')
 
     # training setting
     parser.add_argument('--cp_load_path', type=str, default="no",
@@ -255,7 +258,7 @@ def get_parameters():
         args.output_dim = args.ori_dim * args.obs_dim
     if args.v == 'Affine':
         args.input_dim  = args.st_output_dim + args.obs_dim
-        args.output_dim = args.ori_dim*args.obs_dim + args.ori_dim
+        args.output_dim = args.ori_dim**2 + args.ori_dim*args.obs_dim + args.ori_dim
     if args.v != 'LearnK' and args.v != 'Affine':   
         if args.st_type == 'state_only':
             print("Only apply an ST on the ensemble state data.")

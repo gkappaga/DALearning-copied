@@ -248,6 +248,156 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
         return torch.sum(masked_loss_values)
     else:
         return torch.mean(masked_loss_values)
+    
+import torch
+
+def compute_loss_last(
+    ens_tensor,       # [B, N, D]
+    true_v,           # [B, D]
+    loss_type,        # 'l2','nl2','rmse','es','nes','kes','nkes', etc.
+    valid_B_mask=None,# None or [B] bool mask
+    norm_p=1,
+    kes_sigma=1.0,
+    return_sum=False,
+    H_info=None,
+    ignore_first=0, 
+    A = None,
+    B_mat = None,
+    a = None,
+    args = None,
+    lambda1 = 0.0,
+    lambda2 = 0.0
+):
+    """
+    Compute per‐batch loss for a single (latest) time‐step.
+    """
+    B, N, D = ens_tensor.shape
+
+    # 1) build mask over B
+    if valid_B_mask is None:
+        mask = torch.ones(B, dtype=torch.bool, device=ens_tensor.device)
+    else:
+        mask = valid_B_mask
+        if mask.ndim != 1 or mask.size(0) != B:
+            raise ValueError("valid_B_mask must be shape [B]")
+
+    # 2) collapse ensemble dim → [B, D]
+    ens_mean = ens_tensor.mean(dim=1)   # (B, D)
+
+    # 3) compute per‐batch loss vector L[b]
+    if loss_type == "l2":
+        # sum of squared errors for each batch
+        L = ((ens_mean - true_v)**2).sum(dim=1)           # (B,)
+    elif loss_type == "nl2":
+        err2 = ((ens_mean - true_v)**2).sum(dim=1)
+        true2 = (true_v**2).sum(dim=1)
+        L = err2 / (true2 + 1e-8)
+    elif loss_type == "rmse":
+        mse = ((ens_mean - true_v)**2).sum(dim=1)
+        L = torch.sqrt(mse + 1e-8)
+    elif loss_type in ("es", "nes"):
+        # wrap into a fake time axis for compute_es
+        # compute_es expects [T, B, N, D] and [T, B, D]
+        T_fake = 1
+        et = ens_tensor.unsqueeze(0)   # [1, B, N, D]
+        tv = true_v.unsqueeze(0)       # [1, B, D]
+        es_vals = compute_es(et, tv, norm_p=norm_p).squeeze(0)  # → (B,)
+        if loss_type == "es":
+            L = es_vals
+        else:  # 'nes'
+            true_norm = torch.norm(tv, p=norm_p, dim=2).squeeze(0)   # (B,)
+            L = es_vals / (true_norm + 1e-8)
+    elif loss_type in ("kes", "nkes"):
+        et = ens_tensor.unsqueeze(0)
+        tv = true_v.unsqueeze(0)
+        kes_vals = compute_kernel_es(et, tv, sigma=kes_sigma).squeeze(0)
+        if loss_type == "kes":
+            L = kes_vals
+        else:  # 'nkes'
+            true_norm = torch.norm(tv, p=norm_p, dim=2).squeeze(0)
+            L = kes_vals / (true_norm + 1e-8)
+    else:
+        raise NotImplementedError(f"Loss type '{loss_type}' is not implemented")
+
+    if lambda1 > 0.0:
+        if H_info is None or A is None or B_mat is None or a is None:
+            raise ValueError("Must pass H_info, A_mat, B_mat, a_vec to use lambda1>0")
+        H_fun, H = H_info
+        d = H.shape[0]
+
+        # True observation at batch: [B,d]
+        y_obs = H_fun(true_v.unsqueeze(1)).squeeze(1)  # (B,d)
+
+        # Predicted obs from ensemble: [B,N,d]
+        hv = H_fun(ens_tensor)                         # (B,N,d)
+
+        # Sample means
+        v_bar = ens_mean                              # (B,D)
+        y_bar = hv.mean(dim=1)                        # (B,d)
+
+        # Sample covariances
+        Vp = ens_tensor - v_bar.unsqueeze(1)          # (B,N,D)
+        Hp = hv         - y_bar.unsqueeze(1)          # (B,N,d)
+
+        Cvv = torch.bmm(Vp.transpose(1,2), Vp)/(N-1)   # (B,D,D)
+        Cyy = torch.bmm(Hp.transpose(1,2), Hp)/(N-1)   # (B,d,d)
+        Cvy = torch.bmm(Vp.transpose(1,2), Hp)/(N-1)   # (B,D,d)
+
+        # Invert Cyy safely
+        eps = getattr(args, "cov_eps", 1e-6)
+        Cyy_j = Cyy + eps * torch.eye(d).unsqueeze(0)
+        Cyy_inv = torch.inverse(Cyy_j)
+
+        # Analytic posterior mean: v_bar + Cvy Cyy^{-1} (y_obs - y_bar)
+        innov = (y_obs - y_bar).unsqueeze(-1)          # (B,d,1)
+        m_th = v_bar + torch.bmm(Cvy, Cyy_inv).bmm(innov).squeeze(-1)  # (B,D)
+
+        # Learned posterior mean: A v_bar + B y_bar + a
+        m_nn = (
+            torch.bmm(A, v_bar.unsqueeze(-1)).squeeze(-1)
+          + torch.bmm(B_mat, y_bar.unsqueeze(-1)).squeeze(-1)
+          + a
+        )                                              # (B,D)
+
+        # add squared‐error of means
+        mean_diff = m_th - m_nn                                # (B,D)
+        L = L + lambda1 * torch.norm(mean_diff)    # add L2 norm
+
+    # 5) If desired, analytic vs learned covariance matching
+    if lambda2 > 0.0:
+        if A is None or B_mat is None:
+            raise ValueError("Must pass A_mat, B_mat to use lambda2>0")
+
+        # reuse Cvv, Cyy, Cvy from above, or recompute if lambda1==0
+        if 'Cvv' not in locals():
+            # recompute as in step 4
+            hv = H_fun(ens_tensor); y_bar = hv.mean(dim=1)
+            v_bar = ens_mean
+            Vp, Hp = ens_tensor - v_bar.unsqueeze(1), hv - y_bar.unsqueeze(1)
+            Cvv = torch.bmm(Vp.transpose(1,2), Vp)/(N-1)
+            Cyy = torch.bmm(Hp.transpose(1,2), Hp)/(N-1)
+            Cvy = torch.bmm(Vp.transpose(1,2), Hp)/(N-1)
+
+        # Predicted covariance
+        term1 = A.bmm(Cvv).bmm(A.transpose(-2,-1))
+        term2 = A.bmm(Cvy).bmm(B_mat.transpose(-2,-1))
+        term3 = B_mat.bmm(Cvy.transpose(-2,-1)).bmm(A.transpose(-2,-1))
+        term4 = B_mat.bmm(Cyy).bmm(B_mat.transpose(-2,-1))
+        Cov_pred = term1 + term2 + term3 + term4            # (B,D,D)
+
+        # True covariance
+        Cov_true = Cvv - torch.bmm(Cvy, Cyy_inv).bmm(Cvy.transpose(-2,-1))
+        cov_diff = Cov_pred - Cov_true               # (B,D,D)
+        cov_fro  = torch.norm(cov_diff)  # (B,)
+        L = L + lambda2 * cov_fro
+
+    # 6) Mask and reduce over batch
+    L_valid = L[mask]
+    if L_valid.numel() == 0:
+        return torch.tensor(0.0, requires_grad=True)
+    return L_valid.sum() if return_sum else L_valid.mean()
+
+
 
 class MultiLossUncertaintyWeight(nn.Module):
     def __init__(self, num_losses):
