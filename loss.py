@@ -402,8 +402,10 @@ def compute_loss_last(
     L_valid = L[mask]
     if L_valid.numel() == 0:
         return torch.tensor(0.0, requires_grad=True)
-    return L_valid.sum(), mean_penalty.sum(), cov_pen_vec.sum() if return_sum else L_valid.mean(), mean_penalty.mean(), cov_pen_vec.mean()
-
+    if return_sum:
+        return L_valid.sum(), mean_penalty.sum(), cov_pen_vec.sum()
+    else:
+        return L_valid.mean(), mean_penalty.mean(), cov_pen_vec.mean()
 
 
 class MultiLossUncertaintyWeight(nn.Module):
