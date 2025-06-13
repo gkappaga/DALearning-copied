@@ -185,7 +185,7 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
 
     if loss_type == "l2":
         loss_values_per_element = torch.sum((ens_mean_timed - true_states_timed) ** 2, dim=2)
-    elif loss_type == 'nl2':
+    elif loss_type == ['nl2']:
         error_norm_2 = torch.sum((ens_mean_timed - true_states_timed) ** 2, dim=2)
         true_norm_2 = torch.sum(true_states_timed ** 2, dim=2)
         loss_values_per_element = error_norm_2 / (true_norm_2 + 1e-8)
