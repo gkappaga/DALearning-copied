@@ -57,6 +57,8 @@ if __name__ == "__main__":
         test_rmse_list = []
         test_rrmse_list = []
         test_epochs = []
+        train_mean_pen_list = []
+        train_cov_pen_list = []
         if args.test_only:
             print("Test Only")
             rmse_list, rrmse_list = [], []
@@ -80,8 +82,14 @@ if __name__ == "__main__":
             test_rmse_list.append(mean_rmse_nn)
             test_rrmse_list.append(mean_rrmse_nn)
             for epoch in range(1, 1 + args.epochs):
-                train_loss = train_model(epoch, train_loader, model_list, optimizer, scheduler, args, H_info=H_info)
+                if args.mc_penalty:
+                    train_loss, mean_pen, cov_pen = train_model(epoch, train_loader, model_list, optimizer, scheduler, args, H_info=H_info)
+                    train_mean_pen_list.append(mean_pen)
+                    train_cov_pen_list.append(cov_pen)
+                else:
+                    train_loss = train_model(epoch, train_loader, model_list, optimizer, scheduler, args, H_info=H_info)
                 train_loss_list.append(train_loss)
+                
                 if epoch % args.save_epoch == 0:
                     mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor = \
                         test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'{folder_name}/test_only_{args.N}_{epoch}')
@@ -93,7 +101,10 @@ if __name__ == "__main__":
                     test_epochs.append(epoch)
                     test_rmse_list.append(mean_rmse_nn)
                     test_rrmse_list.append(mean_rrmse_nn)
-                    train_records = {"train_loss": train_loss_list, "test_loss": test_rmse_list, "test_rrmse": test_rrmse_list, "test_epochs": test_epochs}
+                    if args.mc_penalty:
+                        train_records = {"train_loss": train_loss_list, "test_loss": test_rmse_list, "test_rrmse": test_rrmse_list, "test_epochs": test_epochs, "train_mean_pen": train_mean_pen_list, "train_cov_pen": train_cov_pen_list}
+                    else:
+                        train_records = {"train_loss": train_loss_list, "test_loss": test_rmse_list, "test_rrmse": test_rrmse_list, "test_epochs": test_epochs}
                     torch.save(train_records, os.path.join(folder_name, f"training_records.pt"))
                     save_checkpoint(model_list, optimizer, scheduler, filename=os.path.join(folder_name, f"cp_{epoch}.pth"))
 

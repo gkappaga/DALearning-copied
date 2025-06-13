@@ -397,7 +397,7 @@ def compute_loss_last(
     L_valid = L[mask]
     if L_valid.numel() == 0:
         return torch.tensor(0.0, requires_grad=True)
-    return L_valid.sum() if return_sum else L_valid.mean()
+    return L_valid.sum(), mean_penalty.sum(), cov_penalty.sum() if return_sum else L_valid.mean(), mean_penalty.mean(), cov_penalty.mean()
 
 
 

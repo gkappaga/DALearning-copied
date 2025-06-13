@@ -40,6 +40,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     success_count = 0
     total_count = 0
     num_all_nan_batch = 0
+    epoch_mean_penalty = 0.0
+    epoch_cov_penalty  = 0.0
+    mc_batches         = 0
     for batch_ind, batch_v in enumerate(loader):
         t_start = time.time()
         batch_v = batch_v.to(device=args.device)
@@ -59,6 +62,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
         if args.mc_penalty:
             loss = torch.zeros((), device=args.device)
+            running_loss = 0.
+            running_mean_pen, running_cov_pen = 0., 0.
         
         for i in range(end_ind):
             # get next observation
@@ -224,7 +229,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             if args.mc_penalty:
                 nan_mask = torch.isnan(ens_v_a).any(dim=(1, 2))  
                 valid_B_mask = ~nan_mask
-                step_loss = compute_loss_last(ens_tensor = ens_v_a,
+                step_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
                                             true_v = batch_v[i + 1],
                                             loss_type=args.loss_type,
                                             valid_B_mask=valid_B_mask,
@@ -238,6 +243,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                             lambda1 = args.lambda1,
                                             lambda2 = args.lambda2,)
                 loss = loss + step_loss
+                running_mean_pen += mean_penalty
+                running_cov_pen += cov_penalty
+                mc_batches += 1
             
             if epoch <= args.detach_training_epoch:
                 ens_v_a = ens_v_a.detach()
@@ -325,7 +333,16 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 )
 
     scheduler.step()
-    return losses.avg
+    if mc_batches>0:
+        epoch_mean_penalty = running_mean_pen / mc_batches
+        epoch_cov_penalty  = running_cov_pen  / mc_batches
+    else:
+        epoch_mean_penalty = 0.0
+        epoch_cov_penalty  = 0.0
+    if args.mc_penalty:
+        return losses.avg, epoch_mean_penalty, epoch_cov_penalty
+    else:
+        return losses.avg
 
 def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig'):
     model, infl_model, local_model, st_model1, st_model2 = model_list

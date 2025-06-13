@@ -113,6 +113,10 @@ def main():
         default=".",
         help="Directory to save the combined plots"
     )
+    parser.add_argument(
+        "--mc_penalty",
+        default = False,
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -142,6 +146,19 @@ def main():
         title="Test RRMSE vs. Epoch (All Runs)",
         out_path=rmse_file
     )
+    if args.mc_penalty:
+        #plot mean penalty
+        plot_and_save(all_data,
+                    series_key="train_mean_pen",
+                    ylabel="Mean Penalty",
+                    title="Mean Penalty vs. Epoch (All Runs)",
+                    out_path=out_dir / make_unique_name("mean_penalty_all"))
+        #plot covariance penalty
+        plot_and_save(all_data,
+                    series_key="train_cov_pen",
+                    ylabel="Covariance Penalty",
+                    title="Covariance Penalty vs. Epoch (All Runs)",
+                    out_path=out_dir / make_unique_name("cov_penalty_all"))
 
 if __name__ == "__main__":
     main()
