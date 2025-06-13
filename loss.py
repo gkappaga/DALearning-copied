@@ -352,17 +352,16 @@ def compute_loss_last(
         innov = (y_obs - y_bar).unsqueeze(-1)          # (B,d,1)
         m_th = v_bar + torch.bmm(Cvy, Cyy_inv).bmm(innov).squeeze(-1)  # (B,D)
 
-        # Learned posterior mean: A v_bar + B y_bar + a
+        # learned mean
         m_nn = (
-            torch.bmm(A, v_bar.unsqueeze(-1)).squeeze(-1)
-          + torch.bmm(B_mat, y_bar.unsqueeze(-1)).squeeze(-1)
-          + a
-        )                                              # (B,D)
+            torch.bmm(A, v_bar.unsqueeze(-1)).squeeze(-1) +
+            torch.bmm(B_mat, y_bar.unsqueeze(-1)).squeeze(-1) +
+            a
+        )  # (B,D)
 
-        # add squared‐error of means
-        mean_diff = m_th - m_nn                                # (B,D)
-        mean_penalty = torch.norm(mean_diff, p=2, dim =1)/torch.norm(m_th, p = 2, dim = 1)
-        L = L + lambda1 * mean_penalty   # add L2 norm
+        # L2 norm penalty
+        mean_diff = m_th - m_nn                    # (B,D)
+        L = L + lambda1 * torch.norm(mean_diff, dim=1)
 
     # 5) If desired, analytic vs learned covariance matching
     if lambda2 > 0.0:
@@ -388,15 +387,11 @@ def compute_loss_last(
 
         # True covariance
         Cov_true = Cvv - torch.bmm(Cvy, Cyy_inv).bmm(Cvy.transpose(-2,-1))
-        cov_diff = Cov_pred - Cov_true               # (B,D,D)
-        cov_err_vec = torch.norm(cov_diff.reshape(B, -1), p=2, dim=1)  # → (B,)
+        cov_diff = Cov_pred - Cov_true             # (B,D,D)
 
-        # 2) per‐batch norm of the true covariance
-        true_cov_norm = torch.norm(Cov_true.reshape(B, -1), p=2, dim=1).clamp(min=1e-8)  # → (B,)
-
-        # 3) form a *relative* covariance penalty in [0, ∞)
-        cov_pen_vec = cov_err_vec / true_cov_norm    # → (B,)
-        L = L + lambda2 * cov_pen_vec
+        # global Frobenius norm per batch
+        cov_fro = torch.norm(cov_diff, p='fro', dim=(1,2))  # (B,)
+        L = L + lambda2 * cov_fro
 
     # 6) Mask and reduce over batch
     L_valid = L[mask]
