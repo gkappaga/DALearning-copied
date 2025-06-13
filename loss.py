@@ -345,7 +345,7 @@ def compute_loss_last(
 
         # Invert Cyy safely
         eps = getattr(args, "cov_eps", 1e-6)
-        Cyy_j = Cyy + eps * torch.eye(d).unsqueeze(0)
+        Cyy_j = Cyy + eps * torch.eye(Cyy.shape[-1]).unsqueeze(0)
         Cyy_inv = torch.inverse(Cyy_j)
 
         # Analytic posterior mean: v_bar + Cvy Cyy^{-1} (y_obs - y_bar)
