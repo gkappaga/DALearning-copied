@@ -361,7 +361,7 @@ def compute_loss_last(
 
         # L2 norm penalty
         mean_diff = m_th - m_nn                    # (B,D)
-        L = L + lambda1 * torch.norm(mean_diff, dim=1)
+        L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
 
     # 5) If desired, analytic vs learned covariance matching
     if lambda2 > 0.0:
@@ -381,7 +381,7 @@ def compute_loss_last(
         # Predicted covariance
         term1 = A.bmm(Cvv).bmm(A.transpose(-2,-1))
         term2 = A.bmm(Cvy).bmm(B_mat.transpose(-2,-1))
-        term3 = B_mat.bmm(Cvy.transpose(-2,-1)).bmm(A.transpose(-2,-1))
+        term3 = B_mat.bmm(Cvy.transpose(-2,-1)).bmm(A.transpose(-2,-1)) #just transpose term 2
         term4 = B_mat.bmm(Cyy).bmm(B_mat.transpose(-2,-1))
         Cov_pred = term1 + term2 + term3 + term4            # (B,D,D)
 
@@ -391,7 +391,7 @@ def compute_loss_last(
 
         # global Frobenius norm per batch
         cov_fro = torch.norm(cov_diff, p='fro', dim=(1,2))  # (B,)
-        L = L + lambda2 * cov_fro
+        L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
 
     # 6) Mask and reduce over batch
     L_valid = L[mask]
