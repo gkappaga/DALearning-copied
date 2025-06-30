@@ -361,7 +361,6 @@ def compute_loss_last(
 
         # L2 norm penalty
         mean_diff = m_th - m_nn                    # (B,D)
-        print('Mean norm:', torch.norm(m_th, dim = 1))
         L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
 
     # 5) If desired, analytic vs learned covariance matching
@@ -392,8 +391,6 @@ def compute_loss_last(
 
         # global Frobenius norm per batch
         cov_fro = torch.norm(cov_diff, p='fro', dim=(1,2))  # (B,)
-        print('Covariance norm:', torch.norm(Cov_true, dim = (1,2)))
-        print('cov_fro:', cov_fro)
         L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
 
     # 6) Mask and reduce over batch
