@@ -24,6 +24,7 @@ from pathlib import Path
 from datetime import datetime
 import re
 from collections.abc import Sequence
+import numpy as np
 
 def to_numpy(x):
     """
