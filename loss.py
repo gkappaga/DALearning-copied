@@ -369,6 +369,7 @@ def compute_loss_last(
             raise ValueError("Must pass A_mat, B_mat to use lambda2>0")
 
         # reuse Cvv, Cyy, Cvy from above, or recompute if lambda1==0
+        H_fun, H = H_info
         if 'Cvv' not in locals():
             # recompute as in step 4
             hv = H_fun(ens_tensor); y_bar = hv.mean(dim=1)
