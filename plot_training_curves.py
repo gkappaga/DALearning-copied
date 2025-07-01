@@ -68,6 +68,12 @@ def load_records(paths):
             "train_loss": train_loss,
             "test_rrmse": test_rmse
         }
+        if "train_mean_pen" in recs:
+            entry["train_mean_pen"] = recs["train_mean_pen"]
+        if "train_cov_pen" in recs:
+            entry["train_cov_pen"] = recs["train_cov_pen"]
+
+        data[label] = entry
     return data
 
 def plot_and_save(all_data, series_key, ylabel, title, out_path):
