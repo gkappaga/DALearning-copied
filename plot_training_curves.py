@@ -88,7 +88,9 @@ def plot_and_save(all_data, series_key, ylabel, title, out_path):
     """
     plt.figure(figsize=(12, 6))
     for label, rec in all_data.items():
-        y = rec[series_key].detach().cpu().numpy()
+        y = rec[series_key]
+        if isinstance(y, torch.Tensor):
+            y = y.detach().cpu().numpy()
         plt.plot(
             y,
             label=label,
