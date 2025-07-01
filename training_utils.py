@@ -20,6 +20,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
     losses = AverageMeter()
     batch_time = AverageMeter()
+    if args.mc_penalty:
+        running_orig_loss = AverageMeter()
+        running_mean_pen = AverageMeter()
+        running_cov_pen = AverageMeter()
     
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
@@ -63,7 +67,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         if args.mc_penalty:
             loss = torch.zeros((), device=args.device)
             running_loss = 0.
-            running_mean_pen, running_cov_pen = 0., 0.
+            running_orig_loss, running_mean_pen, running_cov_pen = 0., 0., 0.
         
         for i in range(end_ind):
             # get next observation
@@ -229,7 +233,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             if args.mc_penalty:
                 nan_mask = torch.isnan(ens_v_a).any(dim=(1, 2))  
                 valid_B_mask = ~nan_mask
-                step_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
+                orig_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
                                             true_v = batch_v[i + 1],
                                             loss_type=args.loss_type,
                                             valid_B_mask=valid_B_mask,
@@ -242,7 +246,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                             args = args,
                                             lambda1 = args.lambda1,
                                             lambda2 = args.lambda2)
-                loss = loss + step_loss
+                loss += orig_loss + mean_penalty + cov_penalty
+                running_orig_loss += orig_loss
                 running_mean_pen += mean_penalty
                 running_cov_pen += cov_penalty
                 mc_batches += 1
@@ -325,9 +330,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             losses.update(loss.item(), 1)
         
         if args.mc_penalty and mc_batches > 0:
+                avg_orig_pen = running_orig_loss / mc_batches
                 avg_mean_pen = running_mean_pen / mc_batches
                 avg_cov_pen  = running_cov_pen  / mc_batches
-                pen_str = f' | MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
+                pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
         else:
             pen_str = ''
 
@@ -342,13 +348,15 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
     scheduler.step()
     if mc_batches>0:
+        epoch_orig_penalty = running_orig_loss / mc_batches
         epoch_mean_penalty = running_mean_pen / mc_batches
         epoch_cov_penalty  = running_cov_pen  / mc_batches
     else:
+        epoch_orig_penalty = 0.0
         epoch_mean_penalty = 0.0
         epoch_cov_penalty  = 0.0
     if args.mc_penalty:
-        return losses.avg, epoch_mean_penalty, epoch_cov_penalty
+        return losses.avg, epoch_mean_penalty, epoch_cov_penalty, epoch_orig_penalty
     else:
         return losses.avg
 

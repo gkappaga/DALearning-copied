@@ -59,6 +59,7 @@ if __name__ == "__main__":
         test_epochs = []
         train_mean_pen_list = []
         train_cov_pen_list = []
+        train_orig_pen_list = []
         if args.test_only:
             print("Test Only")
             rmse_list, rrmse_list = [], []
@@ -83,9 +84,10 @@ if __name__ == "__main__":
             test_rrmse_list.append(mean_rrmse_nn)
             for epoch in range(1, 1 + args.epochs):
                 if args.mc_penalty:
-                    train_loss, mean_pen, cov_pen = train_model(epoch, train_loader, model_list, optimizer, scheduler, args, H_info=H_info)
+                    train_loss, mean_pen, cov_pen, orig_pen = train_model(epoch, train_loader, model_list, optimizer, scheduler, args, H_info=H_info)
                     train_mean_pen_list.append(mean_pen)
                     train_cov_pen_list.append(cov_pen)
+                    train_orig_pen_list.append(orig_pen)
                 else:
                     train_loss = train_model(epoch, train_loader, model_list, optimizer, scheduler, args, H_info=H_info)
                 train_loss_list.append(train_loss)
@@ -102,7 +104,7 @@ if __name__ == "__main__":
                     test_rmse_list.append(mean_rmse_nn)
                     test_rrmse_list.append(mean_rrmse_nn)
                     if args.mc_penalty:
-                        train_records = {"train_loss": train_loss_list, "test_loss": test_rmse_list, "test_rrmse": test_rrmse_list, "test_epochs": test_epochs, "train_mean_pen": train_mean_pen_list, "train_cov_pen": train_cov_pen_list}
+                        train_records = {"train_loss": train_loss_list, "test_loss": test_rmse_list, "test_rrmse": test_rrmse_list, "test_epochs": test_epochs, "train_mean_pen": train_mean_pen_list, "train_cov_pen": train_cov_pen_list, "train_orig_pen": train_orig_pen_list}
                     else:
                         train_records = {"train_loss": train_loss_list, "test_loss": test_rmse_list, "test_rrmse": test_rrmse_list, "test_epochs": test_epochs}
                     torch.save(train_records, os.path.join(folder_name, f"training_records.pt"))

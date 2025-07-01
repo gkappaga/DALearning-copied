@@ -319,6 +319,7 @@ def compute_loss_last(
     else:
         raise NotImplementedError(f"Loss type '{loss_type}' is not implemented")
 
+    mean_pen = torch.zeros_like(L)
     if lambda1 > 0.0:
         if H_info is None or A is None or B_mat is None or a is None:
             raise ValueError("Must pass H_info, A_mat, B_mat, a_vec to use lambda1>0")
@@ -361,9 +362,11 @@ def compute_loss_last(
 
         # L2 norm penalty
         mean_diff = m_th - m_nn                    # (B,D)
-        L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
+        # L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
+        mean_pen = lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
 
     # 5) If desired, analytic vs learned covariance matching
+    cov_pen = torch.zeros_like(L)
     if lambda2 > 0.0:
         if A is None or B_mat is None:
             raise ValueError("Must pass A_mat, B_mat to use lambda2>0")
@@ -396,7 +399,8 @@ def compute_loss_last(
 
         # global Frobenius norm per batch
         cov_fro = torch.norm(cov_diff, p='fro', dim=(1,2))  # (B,)
-        L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
+        # L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
+        cov_pen = lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2))
 
     # 6) Mask and reduce over batch
     L_valid = L[mask]
@@ -408,9 +412,9 @@ def compute_loss_last(
     if lambda2 == 0:
         cov_fro = torch.zeros_like(L_valid)
     if return_sum:
-        return L_valid.sum(), mean_diff.sum(), cov_fro.sum()
+        return L_valid.sum(), mean_pen.sum(), cov_pen.sum()
     else:
-        return L_valid.mean(), mean_diff.mean(), cov_fro.mean()
+        return L_valid.mean(), mean_pen.mean(), cov_pen.mean()
 
 
 class MultiLossUncertaintyWeight(nn.Module):
@@ -476,6 +480,34 @@ if __name__ == "__main__":
     if num_valid_batch_elements > 0:
          print(f"Verification (TNES): sum/N_batch = {tnes_loss_classical_sum.item()/num_valid_batch_elements:.6f}, mean = {tnes_loss_classical_mean.item():.6f}")
          assert torch.isclose(tnes_loss_classical_sum/num_valid_batch_elements, tnes_loss_classical_mean, atol=1e-5)
+    
+
+    # dummy testing for compute_loss_last
+    print("\n--- Testing compute_loss_last ---")
+    ens_tensor = torch.randn(batch_size, ensemble_size, feature_dim)
+    true_v = torch.randn(batch_size, feature_dim)
+    valid_B_mask = torch.ones(batch_size, dtype=torch.bool)
+    loss_type = 'l2'  # Example loss type
+    #create dummy values for H_info, A, B_mat, a, args
+    H_info = (lambda x: x, torch.eye(feature_dim))  # Dummy H
+    # A and B must be 3d tensors for batch matrix multiplication
+    A = torch.randn(batch_size, feature_dim, feature_dim)
+    B_mat = torch.randn(batch_size, feature_dim, feature_dim)
+    a = torch.randn(feature_dim)
+
+    args = type('', (), {})()  # Create a dummy args object
+    # add device to args
+    args.device = ens_tensor.device
+
+    loss_last_mean, mean_diff, cov_fro = compute_loss_last(
+        ens_tensor, true_v, loss_type, valid_B_mask=valid_B_mask,
+        norm_p=1, kes_sigma=1.0, return_sum=False,
+        ignore_first=0, lambda1=0.1, lambda2=0.5, H_info=H_info, A=A, B_mat=B_mat, a=a, args=args
+    )
+    print(f"Loss (last mean): {loss_last_mean.item():.6f}")
+    print(f"Mean difference: {mean_diff.item():.6f}")
+    print(f"Covariance Frobenius norm: {cov_fro.item():.6f}")
+
 
 
     print("\nMain tests completed. Review output values.")

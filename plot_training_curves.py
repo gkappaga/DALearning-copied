@@ -4,17 +4,14 @@ plot_training_curves.py
 
 Loads one or more training record files (.pt) and produces combined:
   1) Training loss vs. epoch (all runs on one plot)
-  2) Test RMSE vs. epoch (all runs on one plot)
+  2) Test RRMSE vs. epoch (all runs on one plot)
 
-Legend labels drop the leading timestamp from the folder name,
-and the legend is placed outside to the right.
-Output filenames are timestamped to avoid overwriting.
-
-Usage:
-  python plot_training_curves.py \
-      --input save/.../2025-05-25_19-07lorenz96_1.0_10_60_8192_nl2_EnST_joint_LearnK/training_records.pt \
-      --input save/.../another_run/training_records.pt \
-      --output_dir figures
+If --mc_penalty is set and the records contain
+train_mean_pen, train_cov_pen, train_orig_pen, it will also plot:
+  3) Mean penalty vs. epoch
+  4) Covariance penalty vs. epoch
+  5) Original penalty vs. epoch
+  6) A combined plot of all four series on one figure.
 """
 
 import argparse
@@ -27,184 +24,144 @@ from collections.abc import Sequence
 import numpy as np
 
 def to_numpy(x):
-    """
-    Recursively convert:
-      - torch.Tensor           -> detached numpy array or scalar
-      - sequence of the above -> numpy array
-      - anything else         -> numpy array of that value
-    """
-    # Single Tensor
     if isinstance(x, torch.Tensor):
-        # If it's a 0-dim tensor (scalar), .item() is simpler
-        if x.dim() == 0:
-            return x.detach().cpu().item()
-        # else get full array
-        return x.detach().cpu().numpy()
-
-    # A Sequence (but not string/bytes)
+        return x.detach().cpu().item() if x.dim()==0 else x.detach().cpu().numpy()
     if isinstance(x, Sequence) and not isinstance(x, (str, bytes)):
-        # Recursively convert each element
-        lst = [to_numpy(el) for el in x]
-        return np.array(lst)
-
-    # NumPy array
+        return np.array([ to_numpy(el) for el in x ])
     if isinstance(x, np.ndarray):
         return x
-
-    # Fallback: wrap scalar in array
     return np.array(x)
 
 def extract_label(path_str):
-    """
-    Given the full path to training_records.pt, take its parent folder name
-    and strip off any leading YYYY-MM-DD_HH-MM timestamp, returning a concise label.
-    """
     folder = Path(path_str).parent.name
-    # Remove leading timestamp like '2025-05-25_19-07'
     return re.sub(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}', '', folder)
 
 def make_unique_name(base: str) -> str:
-    """Append current timestamp to base name and add .png extension."""
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     return f"{base}_{ts}.png"
 
 def load_records(paths):
-    """
-    Load each .pt file (onto CPU), auto-detect 'train_loss' and 'test_rmse'
-    or fall back to the first two sequence-like entries.
-    Returns dict: { label: { 'train_loss': [...], 'test_rmse': [...] } }
-    """
     data = {}
     for p in paths:
         raw = torch.load(p, map_location="cpu")
         recs = {}
         for k, v in raw.items():
-            if isinstance(v, torch.Tensor):
-                recs[k] = v.detach().cpu().numpy()
-            else:
-                recs[k] = v
-        # find keys whose values are list/tuple/tensor-like (but not strings)
+            recs[k] = v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v
+
         seq_keys = [
-            k for k, v in recs.items()
+            k for k,v in recs.items()
             if hasattr(v, "__len__") and not isinstance(v, (str, bytes))
         ]
-        if "train_loss" in recs and "test_rrmse" in recs:
-            train_loss = recs["train_loss"]
-            test_rmse  = recs["test_rrmse"]
-        elif len(seq_keys) >= 2:
-            train_loss = recs[seq_keys[0]]
-            test_rmse  = recs[seq_keys[1]]
-            print(f"Auto-detected keys for {p}: train_loss←'{seq_keys[0]}', test_rrmse←'{seq_keys[1]}'")
-        else:
-            raise KeyError(
-                f"Could not find train_loss/test_rmse in {p}; available keys: {list(recs.keys())}"
-            )
-        label = extract_label(p)
+
+        # primary series
+        if "train_loss" not in recs or "test_rrmse" not in recs:
+            raise KeyError(f"Need train_loss & test_rrmse in {p}; got {list(recs.keys())}")
         entry = {
-            "train_loss": train_loss,
-            "test_rrmse": test_rmse
+            "train_loss": recs["train_loss"],
+            "test_rrmse": recs["test_rrmse"]
         }
 
-        # Add mean-penalty & cov-penalty if present
-        if "train_mean_pen" in recs:
-            entry["train_mean_pen"] = recs["train_mean_pen"]
-        if "train_cov_pen" in recs:
-            entry["train_cov_pen"] = recs["train_cov_pen"]
+        # optional penalties
+        for pen in ("train_mean_pen", "train_cov_pen", "train_orig_pen"):
+            if pen in recs:
+                entry[pen] = recs[pen]
 
-        data[label] = entry
+        data[ extract_label(p) ] = entry
     return data
 
 def plot_and_save(all_data, series_key, ylabel, title, out_path):
-    """
-    Generic plotting routine:
-      - all_data: dict of { label: { 'train_loss': [...], 'test_rrmse': [...] } }
-      - series_key: either 'train_loss' or 'test_rrmse'
-      - ylabel/title: axis label and title
-      - out_path: Path where to save
-    """
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(10,5))
     for label, rec in all_data.items():
         y = to_numpy(rec[series_key])
-        plt.plot(
-            y,
-            label=label,
-            linewidth=2
-        )
-    plt.xlabel("Epoch", fontsize=14)
-    plt.ylabel(ylabel, fontsize=14)
-    plt.title(title, fontsize=16)
+        plt.plot(y, label=label, linewidth=2)
+    plt.xlabel("Epoch"); plt.ylabel(ylabel); plt.title(title)
     plt.grid(True, linestyle="--", alpha=0.5)
-    plt.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.01, 1),
-        frameon=False,
-        fontsize=12
-    )
+    plt.legend(loc="upper left", bbox_to_anchor=(1.02,1), frameon=False)
     plt.tight_layout()
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved plot to {out_path}")
 
+def plot_multiple(all_data, series_keys, ylabel, title, out_path):
+    plt.figure(figsize=(10,5))
+    for label, rec in all_data.items():
+        for key in series_keys:
+            if key in rec:
+                y = to_numpy(rec[key])
+                plt.plot(y, label=f"{label}:{key}", linewidth=1.5)
+    plt.xlabel("Epoch"); plt.ylabel(ylabel); plt.title(title)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.legend(loc="upper left", bbox_to_anchor=(1.02,1), frameon=False, fontsize=8)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved combined plot to {out_path}")
+
 def main():
-    parser = argparse.ArgumentParser("Plot combined training curves")
+    parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-i", "--input",
-        nargs="+",
-        required=True,
-        help="One or more paths to training_records.pt files"
+        "-i","--input", nargs="+", required=True,
+        help="Paths to training_records.pt"
     )
     parser.add_argument(
-        "-o", "--output_dir",
-        default=".",
-        help="Directory to save the combined plots"
+        "-o","--output_dir", default=".",
+        help="Where to save the plots"
     )
     parser.add_argument(
-        "--mc_penalty",
-        default = False,
+        "--mc_penalty", action="store_true",
+        help="Also look for and plot mean/cov/orig penalties"
     )
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load all runs
     all_data = load_records(args.input)
 
-    # Generate timestamped filenames
-    loss_file = out_dir / make_unique_name("training_loss_all")
-    rmse_file = out_dir / make_unique_name("test_rrmse_all")
-    # print(all_data.items())
-
-    # Plot training loss
+    # 1) training loss
     plot_and_save(
         all_data,
         series_key="train_loss",
         ylabel="Training Loss",
-        title="Training Loss vs. Epoch (All Runs)",
-        out_path=loss_file
+        title="Training Loss vs. Epoch",
+        out_path=out_dir / make_unique_name("training_loss_all")
     )
 
-    # Plot test RMSE
+    # 2) test RRMSE
     plot_and_save(
         all_data,
         series_key="test_rrmse",
         ylabel="Test RRMSE",
-        title="Test RRMSE vs. Epoch (All Runs)",
-        out_path=rmse_file
+        title="Test RRMSE vs. Epoch",
+        out_path=out_dir / make_unique_name("test_rrmse_all")
     )
-    if args.mc_penalty:
-        #plot mean penalty
-        plot_and_save(all_data,
-                    series_key="train_mean_pen",
-                    ylabel="Mean Penalty",
-                    title="Mean Penalty vs. Epoch (All Runs)",
-                    out_path=out_dir / make_unique_name("mean_penalty_all"))
-        #plot covariance penalty
-        plot_and_save(all_data,
-                    series_key="train_cov_pen",
-                    ylabel="Covariance Penalty",
-                    title="Covariance Penalty vs. Epoch (All Runs)",
-                    out_path=out_dir / make_unique_name("cov_penalty_all"))
 
-if __name__ == "__main__":
+    if args.mc_penalty:
+        # individual penalty plots
+        for pen_key, pen_name in [
+            ("train_mean_pen", "Mean Penalty"),
+            ("train_cov_pen", "Covariance Penalty"),
+            ("train_orig_pen", "Original Penalty"),
+        ]:
+            # only if present
+            if any(pen_key in rec for rec in all_data.values()):
+                plot_and_save(
+                    all_data,
+                    series_key=pen_key,
+                    ylabel=pen_name,
+                    title=f"{pen_name} vs. Epoch",
+                    out_path=out_dir / make_unique_name(pen_key)
+                )
+
+        # combined all four on one plot
+        combined_keys = ["train_loss", "train_orig_pen", "train_mean_pen", "train_cov_pen"]
+        plot_multiple(
+            all_data,
+            series_keys=combined_keys,
+            ylabel="Value",
+            title="Loss & Penalties vs. Epoch",
+            out_path=out_dir / make_unique_name("loss_and_penalties_all")
+        )
+
+if __name__=="__main__":
     main()
