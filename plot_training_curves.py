@@ -64,10 +64,12 @@ def load_records(paths):
                 f"Could not find train_loss/test_rmse in {p}; available keys: {list(recs.keys())}"
             )
         label = extract_label(p)
-        data[label] = {
+        entry = {
             "train_loss": train_loss,
             "test_rrmse": test_rmse
         }
+
+        # Add mean-penalty & cov-penalty if present
         if "train_mean_pen" in recs:
             entry["train_mean_pen"] = recs["train_mean_pen"]
         if "train_cov_pen" in recs:
