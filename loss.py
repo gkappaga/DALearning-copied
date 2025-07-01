@@ -402,6 +402,11 @@ def compute_loss_last(
     L_valid = L[mask]
     if L_valid.numel() == 0:
         return torch.tensor(0.0, requires_grad=True)
+    
+    if lambda1 == 0:
+        mean_diff = torch.zeros_like(L_valid)
+    if lambda2 == 0:
+        cov_fro = torch.zeros_like(L_valid)
     if return_sum:
         return L_valid.sum(), mean_diff.sum(), cov_fro.sum()
     else:
