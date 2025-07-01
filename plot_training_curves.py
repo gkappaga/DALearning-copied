@@ -97,6 +97,7 @@ def plot_and_save(all_data, series_key, ylabel, title, out_path):
         y = rec[series_key]
         if isinstance(y, torch.Tensor):
             y = y.detach().numpy()
+        print(f"{label} – series '{series_key}' type:", type(y))
         plt.plot(
             y,
             label=label,
