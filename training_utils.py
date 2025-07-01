@@ -328,8 +328,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 avg_mean_pen = running_mean_pen / mc_batches
                 avg_cov_pen  = running_cov_pen  / mc_batches
                 pen_str = f' | MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
-            else:
-                pen_str = ''
+        else:
+            pen_str = ''
 
         if (batch_ind + 1) % args.print_batch == 0:
             print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}]\t'
