@@ -46,7 +46,13 @@ def load_records(paths):
     """
     data = {}
     for p in paths:
-        recs = torch.load(p, map_location="cpu")
+        raw = torch.load(p, map_location="cpu")
+        recs = {}
+        for k, v in raw.items():
+            if isinstance(v, torch.Tensor):
+                recs[k] = v.detach().cpu().numpy()
+            else:
+                recs[k] = v
         # find keys whose values are list/tuple/tensor-like (but not strings)
         seq_keys = [
             k for k, v in recs.items()
