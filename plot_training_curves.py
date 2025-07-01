@@ -98,6 +98,7 @@ def plot_and_save(all_data, series_key, ylabel, title, out_path):
         if isinstance(y, torch.Tensor):
             y = y.detach().numpy()
         print(f"{label} – series '{series_key}' type:", type(y))
+        print(y)
         plt.plot(
             y,
             label=label,
@@ -146,7 +147,7 @@ def main():
     # Generate timestamped filenames
     loss_file = out_dir / make_unique_name("training_loss_all")
     rmse_file = out_dir / make_unique_name("test_rrmse_all")
-    print(all_data.items())
+    # print(all_data.items())
 
     # Plot training loss
     plot_and_save(
