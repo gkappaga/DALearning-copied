@@ -323,6 +323,13 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             # raise RuntimeError("All batches resulted in NaN loss. Stopping training.")
             loss = torch.tensor(float('nan')) 
             losses.update(loss.item(), 1)
+        
+        if args.mc_penalty and mc_batches > 0:
+                avg_mean_pen = running_mean_pen / mc_batches
+                avg_cov_pen  = running_cov_pen  / mc_batches
+                pen_str = f' | MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
+            else:
+                pen_str = ''
 
         if (batch_ind + 1) % args.print_batch == 0:
             print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}]\t'
@@ -330,6 +337,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 f'Loss {losses.val:.3f} (Avg: {losses.avg:.3f})\t'
                 f'Current learning rate: {optimizer.param_groups[0]["lr"]:.2e}\t'
                 f'No NAN Percentage: {success_count / total_count * 100: .2f}%\t'
+                f'{pen_str}'
                 )
 
     scheduler.step()
