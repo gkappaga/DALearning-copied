@@ -128,6 +128,7 @@ def main():
     # Generate timestamped filenames
     loss_file = out_dir / make_unique_name("training_loss_all")
     rmse_file = out_dir / make_unique_name("test_rrmse_all")
+    print(all_data.items())
 
     # Plot training loss
     plot_and_save(
