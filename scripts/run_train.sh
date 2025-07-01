@@ -29,8 +29,11 @@ python train.py \
     --sigma_y 1 \
     --seed 42 \
     --v 'Affine' \
-    --epochs 10 \
-    --save_epoch 10
+    --epochs 100 \
+    --save_epoch 10 \
+    --mc_penalty True \
+    --lambda1 0 \
+    --lambda2 0.00005
 
 # python train.py \
 #     --dataset lorenz96 \
