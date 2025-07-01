@@ -88,8 +88,9 @@ def plot_and_save(all_data, series_key, ylabel, title, out_path):
     """
     plt.figure(figsize=(12, 6))
     for label, rec in all_data.items():
+        y = rec[series_key].detach().cpu().numpy()
         plt.plot(
-            rec[series_key],
+            y,
             label=label,
             linewidth=2
         )
