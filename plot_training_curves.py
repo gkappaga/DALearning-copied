@@ -23,6 +23,35 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from datetime import datetime
 import re
+from collections.abc import Sequence
+
+def to_numpy(x):
+    """
+    Recursively convert:
+      - torch.Tensor           -> detached numpy array or scalar
+      - sequence of the above -> numpy array
+      - anything else         -> numpy array of that value
+    """
+    # Single Tensor
+    if isinstance(x, torch.Tensor):
+        # If it's a 0-dim tensor (scalar), .item() is simpler
+        if x.dim() == 0:
+            return x.detach().cpu().item()
+        # else get full array
+        return x.detach().cpu().numpy()
+
+    # A Sequence (but not string/bytes)
+    if isinstance(x, Sequence) and not isinstance(x, (str, bytes)):
+        # Recursively convert each element
+        lst = [to_numpy(el) for el in x]
+        return np.array(lst)
+
+    # NumPy array
+    if isinstance(x, np.ndarray):
+        return x
+
+    # Fallback: wrap scalar in array
+    return np.array(x)
 
 def extract_label(path_str):
     """
@@ -94,11 +123,7 @@ def plot_and_save(all_data, series_key, ylabel, title, out_path):
     """
     plt.figure(figsize=(12, 6))
     for label, rec in all_data.items():
-        y = rec[series_key]
-        if isinstance(y, torch.Tensor):
-            y = y.detach().numpy()
-        print(f"{label} – series '{series_key}' type:", type(y))
-        print(y)
+        y = to_numpy(rec[series_key])
         plt.plot(
             y,
             label=label,
