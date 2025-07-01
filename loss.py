@@ -378,6 +378,10 @@ def compute_loss_last(
             Cvv = torch.bmm(Vp.transpose(1,2), Vp)/(N-1)
             Cyy = torch.bmm(Hp.transpose(1,2), Hp)/(N-1)
             Cvy = torch.bmm(Vp.transpose(1,2), Hp)/(N-1)
+            # Invert Cyy safely
+            eps = getattr(args, "cov_eps", 1e-3)
+            Cyy_j = Cyy + eps * torch.eye(Cyy.shape[-1], device = args.device).unsqueeze(0)
+            Cyy_inv = torch.inverse(Cyy_j)
 
         # Predicted covariance
         term1 = A.bmm(Cvv).bmm(A.transpose(-2,-1))
