@@ -47,6 +47,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     epoch_mean_penalty = 0.0
     epoch_cov_penalty  = 0.0
     mc_batches         = 0
+    epoch_orig_penalty = 0
+    epoch_mean_penalty = 0
+    epoch_cov_penalty  = 0
     for batch_ind, batch_v in enumerate(loader):
         t_start = time.time()
         batch_v = batch_v.to(device=args.device)
@@ -332,8 +335,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         
         if args.mc_penalty and mc_batches > 0:
                 avg_orig_pen = running_orig_loss / mc_batches
+                epoch_orig_penalty += avg_orig_pen
                 avg_mean_pen = running_mean_pen / mc_batches
+                epoch_mean_penalty += avg_mean_pen
                 avg_cov_pen  = running_cov_pen  / mc_batches
+                epoch_cov_penalty  += avg_cov_pen
                 pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
         else:
             pen_str = ''
@@ -348,14 +354,14 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 )
 
     scheduler.step()
-    if mc_batches>0:
-        epoch_orig_penalty = running_orig_loss / mc_batches
-        epoch_mean_penalty = running_mean_pen / mc_batches
-        epoch_cov_penalty  = running_cov_pen  / mc_batches
-    else:
-        epoch_orig_penalty = 0.0
-        epoch_mean_penalty = 0.0
-        epoch_cov_penalty  = 0.0
+    # if mc_batches>0:
+    #     epoch_orig_penalty = running_orig_loss / mc_batches
+    #     epoch_mean_penalty = running_mean_pen / mc_batches
+    #     epoch_cov_penalty  = running_cov_pen  / mc_batches
+    # else:
+    #     epoch_orig_penalty = 0.0
+    #     epoch_mean_penalty = 0.0
+    #     epoch_cov_penalty  = 0.0
     if args.mc_penalty:
         return losses.avg, epoch_mean_penalty, epoch_cov_penalty, epoch_orig_penalty
     else:
