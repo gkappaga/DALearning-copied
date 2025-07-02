@@ -363,7 +363,8 @@ def compute_loss_last(
         # L2 norm penalty
         mean_diff = m_th - m_nn                    # (B,D)
         # L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
-        mean_pen = lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
+        # mean_pen = lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
+        mean_pen = lambda1 * torch.norm(mean_diff, dim=1)
 
     # 5) If desired, analytic vs learned covariance matching
     cov_pen = torch.zeros_like(L)
@@ -400,7 +401,8 @@ def compute_loss_last(
         # global Frobenius norm per batch
         cov_fro = torch.norm(cov_diff, p='fro', dim=(1,2))  # (B,)
         # L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
-        cov_pen = lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2))
+        # cov_pen = lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2))
+        cov_pen = lambda2 * cov_fro
 
     # 6) Mask and reduce over batch
     L_valid = L[mask]
