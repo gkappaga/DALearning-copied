@@ -67,7 +67,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         if args.mc_penalty:
             loss = torch.zeros((), device=args.device)
             running_loss = 0.
-            mc_batches = 0
+            # mc_batches = 0
             running_orig_loss, running_mean_pen, running_cov_pen = 0., 0., 0.
         
         for i in range(end_ind):
