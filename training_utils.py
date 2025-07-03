@@ -47,6 +47,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     epoch_mean_penalty = 0.0
     epoch_cov_penalty  = 0.0
     mc_batches         = 0
+    total_mc_batches = 0
     epoch_orig_penalty = AverageMeter()
     epoch_mean_penalty = AverageMeter()
     epoch_cov_penalty  = AverageMeter()
@@ -255,6 +256,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 running_mean_pen += mean_penalty
                 running_cov_pen += cov_penalty
                 mc_batches += 1
+                total_mc_batches += 1
             
             if epoch <= args.detach_training_epoch:
                 ens_v_a = ens_v_a.detach()
@@ -333,12 +335,12 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             loss = torch.tensor(float('nan')) 
             losses.update(loss.item(), 1)
         
-        if args.mc_penalty and mc_batches > 0:
-                avg_orig_pen = running_orig_loss / mc_batches
+        if args.mc_penalty and total_mc_batches > 0:
+                avg_orig_pen = running_orig_loss / total_mc_batches
                 epoch_orig_penalty.update(avg_orig_pen, 1)
-                avg_mean_pen = running_mean_pen / mc_batches
+                avg_mean_pen = running_mean_pen / total_mc_batches
                 epoch_mean_penalty.update(avg_mean_pen, 1)
-                avg_cov_pen  = running_cov_pen  / mc_batches
+                avg_cov_pen  = running_cov_pen  / total_mc_batches
                 epoch_cov_penalty.update(avg_cov_pen, 1)
                 pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
         else:
