@@ -20,10 +20,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
     losses = AverageMeter()
     batch_time = AverageMeter()
-    if args.mc_penalty:
-        running_orig_loss = AverageMeter()
-        running_mean_pen = AverageMeter()
-        running_cov_pen = AverageMeter()
     
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
