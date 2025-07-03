@@ -238,12 +238,16 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             if args.mc_penalty:
                 nan_mask = torch.isnan(ens_v_a).any(dim=(1, 2))  
                 valid_B_mask = ~nan_mask
+                ###
+                # SEPARATE INTO 3 FUNCTIONS FOR LOSS AND PENALTIES
+                ###
                 orig_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
                                             true_v = batch_v[i + 1],
                                             loss_type=args.loss_type,
                                             valid_B_mask=valid_B_mask,
                                             norm_p = args.es_p,
                                             kes_sigma = args.kes_sigma,
+                                            return_sum = True,
                                             H_info=H_info,
                                             A = A_mat,
                                             B_mat = B_mat,
@@ -258,7 +262,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 mc_batches += 1
                 total_mc_batches += 1
             
-            if epoch <= args.detach_training_epoch:
+            # if epoch <= args.detach_training_epoch: # if epoch % 5 == 0:
+            if epoch % 5 == 0:
                 ens_v_a = ens_v_a.detach()
 
         # Concat outputs
