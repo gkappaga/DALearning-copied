@@ -252,9 +252,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                             lambda1 = args.lambda1,
                                             lambda2 = args.lambda2)
                 loss += orig_loss + mean_penalty + cov_penalty
-                running_orig_loss += orig_loss
-                running_mean_pen += mean_penalty
-                running_cov_pen += cov_penalty
+                running_orig_loss += orig_loss.item()
+                running_mean_pen += mean_penalty.item()
+                running_cov_pen += cov_penalty.item()
                 mc_batches += 1
                 total_mc_batches += 1
             
@@ -338,13 +338,13 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         if args.mc_penalty and total_mc_batches > 0:
                 avg_orig_pen = running_orig_loss / total_mc_batches
                 # epoch_orig_penalty.update(avg_orig_pen, 1)
-                epoch_orig_penalty += avg_orig_pen
+                epoch_orig_penalty += float(avg_orig_pen)
                 avg_mean_pen = running_mean_pen / total_mc_batches
                 # epoch_mean_penalty.update(avg_mean_pen, 1)
-                epoch_mean_penalty += avg_mean_pen
+                epoch_mean_penalty += float(avg_mean_pen)
                 avg_cov_pen  = running_cov_pen  / total_mc_batches
                 # epoch_cov_penalty.update(avg_cov_pen, 1)
-                epoch_cov_penalty += avg_cov_pen
+                epoch_cov_penalty += float(avg_cov_pen)
                 pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
                 count += 1
         else:
