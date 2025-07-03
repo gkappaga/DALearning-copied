@@ -2,9 +2,9 @@
 
 # Submit this script with: sbatch <this-filename>
 
-#SBATCH --time=2-00:00:00     # walltime (2 days)
+#SBATCH --time=02:00:00     # walltime (2 days)
 #SBATCH --nodes=1           # number of nodes (1 node)
-#SBATCH --gres=gpu:4        # 4 GPUs of any type
+#SBATCH --gres=gpu:1        # 4 GPUs of any type
 #SBATCH --partition=gpu     # use GPU partition
 #SBATCH --ntasks=1          # 1 task
 #SBATCH -J "gautham-gpu-LearnAffine"   # job name
