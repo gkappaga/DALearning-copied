@@ -241,20 +241,20 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 ###
                 # SEPARATE INTO 3 FUNCTIONS FOR LOSS AND PENALTIES
                 ###
-                orig_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
-                                            true_v = batch_v[i + 1],
-                                            loss_type=args.loss_type,
-                                            valid_B_mask=valid_B_mask,
-                                            norm_p = args.es_p,
-                                            kes_sigma = args.kes_sigma,
-                                            # return_sum = True,
-                                            H_info=H_info,
-                                            A = A_mat,
-                                            B_mat = B_mat,
-                                            a = a_vec,
-                                            args = args,
-                                            lambda1 = args.lambda1,
-                                            lambda2 = args.lambda2)
+                # orig_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
+                #                             true_v = batch_v[i + 1],
+                #                             loss_type=args.loss_type,
+                #                             valid_B_mask=valid_B_mask,
+                #                             norm_p = args.es_p,
+                #                             kes_sigma = args.kes_sigma,
+                #                             # return_sum = True,
+                #                             H_info=H_info,
+                #                             A = A_mat,
+                #                             B_mat = B_mat,
+                #                             a = a_vec,
+                #                             args = args,
+                #                             lambda1 = args.lambda1,
+                #                             lambda2 = args.lambda2)
                 orig_loss = compute_loss(
                     ens_tensor=ens_tensor,
                     batch_v=batch_v,
