@@ -364,6 +364,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 loss = loss / mc_batches
                 losses.update(loss.item(), torch.sum(valid_B_mask))
 
+                print("LOSS REQUIRES GRAD?", loss.requires_grad)
+                for name, p in model.named_parameters():
+                    if p.grad is not None:
+                        print(name, "grad norm:", p.grad.norm().item())
+
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.zero_grad()
                 loss.backward()
