@@ -255,16 +255,18 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 #                             args = args,
                 #                             lambda1 = args.lambda1,
                 #                             lambda2 = args.lambda2)
-                orig_loss = compute_loss(
-                    ens_tensor=ens_v_a.unsqueeze(0),
-                    batch_v=batch_v[i + 1].unsqueeze(0),
-                    loss_type=args.loss_type,
-                    # ignore_first=ignore_first,
-                    end_ind=None,
-                    valid_B_mask=valid_B_mask,
-                    norm_p=args.es_p,
-                    kes_sigma=args.kes_sigma
-                )
+                orig_loss = 0
+                for loss_type in args.loss_type:
+                    orig_loss += compute_loss(
+                        ens_tensor=ens_v_a.unsqueeze(0),
+                        batch_v=batch_v[i + 1].unsqueeze(0),
+                        loss_type=loss_type,
+                        # ignore_first=ignore_first,
+                        end_ind=None,
+                        valid_B_mask=valid_B_mask,
+                        norm_p=args.es_p,
+                        kes_sigma=args.kes_sigma
+                    )
                 mean_penalty = compute_mean_pen(
                     ens_tensor=ens_v_a,
                     true_v=batch_v[i + 1],
