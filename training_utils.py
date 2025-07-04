@@ -282,11 +282,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 )
                 cov_penalty = compute_cov_pen(
                     ens_tensor=ens_v_a,
-                    true_v=batch_v[i + 1],
                     valid_B_mask=valid_B_mask,
                     return_sum=True,
                     H_info=H_info,
-                    # ignore_first=ignore_first,
                     A=A_mat,
                     B_mat=B_mat,
                     a=a_vec,
