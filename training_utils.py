@@ -358,7 +358,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 #                         kes_sigma=args.kes_sigma)
 
                 success_count += torch.sum(valid_B_mask)
-                # loss = loss / mc_batches
+                loss = loss / mc_batches
                 losses.update(loss.item(), torch.sum(valid_B_mask))
 
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
