@@ -69,7 +69,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             end_ind = len(batch_v) - 1
 
         if args.mc_penalty:
-            loss = torch.zeros((), device=args.device, requires_grad = True)
+            # loss = torch.zeros((), device=args.device, requires_grad = True)
+            loss = None
             running_loss = 0.
             # mc_batches = 0
             running_orig_loss, running_mean_pen, running_cov_pen = 0., 0., 0.
@@ -291,7 +292,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     args=args,
                     lambda2=args.lambda2
                 )
-                loss += orig_loss + mean_penalty + cov_penalty
+                step_loss = orig_loss + mean_penalty + cov_penalty
+                loss = step_loss if loss is None else loss + step_loss
+                # loss += orig_loss + mean_penalty + cov_penalty
                 running_orig_loss += orig_loss.item()
                 running_mean_pen += mean_penalty.item()
                 running_cov_pen += cov_penalty.item()
