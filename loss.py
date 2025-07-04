@@ -332,14 +332,9 @@ def compute_mean_pen(
     # 5) If desired, analytic vs learned covariance matching
 def compute_cov_pen(
     ens_tensor,       # [B, N, D]
-    true_v,           # [B, D]
-    loss_type,        # 'l2','nl2','rmse','es','nes','kes','nkes', etc.
     valid_B_mask=None,# None or [B] bool mask
-    norm_p=1,
-    kes_sigma=1.0,
     return_sum=False,
     H_info=None,
-    ignore_first=0, 
     A = None,
     B_mat = None,
     a = None,
