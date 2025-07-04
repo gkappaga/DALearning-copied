@@ -251,22 +251,17 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
     
 import torch
 
-def compute_loss_last(
+def compute_mean_pen(
     ens_tensor,       # [B, N, D]
     true_v,           # [B, D]
-    loss_type,        # 'l2','nl2','rmse','es','nes','kes','nkes', etc.
     valid_B_mask=None,# None or [B] bool mask
-    norm_p=1,
-    kes_sigma=1.0,
     return_sum=False,
     H_info=None,
-    ignore_first=0, 
     A = None,
     B_mat = None,
     a = None,
     args = None,
     lambda1 = 0.0,
-    lambda2 = 0.0
 ):
     """
     Compute per‐batch loss for a single (latest) time‐step.
@@ -283,43 +278,6 @@ def compute_loss_last(
 
     # 2) collapse ensemble dim → [B, D]
     ens_mean = ens_tensor.mean(dim=1)   # (B, D)
-
-    # 3) compute per‐batch loss vector L[b]
-    if loss_type == "l2":
-        # sum of squared errors for each batch
-        L = ((ens_mean - true_v)**2).sum(dim=1)           # (B,)
-    elif loss_type == ["nl2"]:
-        err2 = ((ens_mean - true_v)**2).sum(dim=1)
-        true2 = (true_v**2).sum(dim=1)
-        L = err2 / (true2 + 1e-8)
-    elif loss_type == "rmse":
-        mse = ((ens_mean - true_v)**2).sum(dim=1)
-        L = torch.sqrt(mse + 1e-8)
-    elif loss_type in ("es", "nes"):
-        # wrap into a fake time axis for compute_es
-        # compute_es expects [T, B, N, D] and [T, B, D]
-        T_fake = 1
-        et = ens_tensor.unsqueeze(0)   # [1, B, N, D]
-        tv = true_v.unsqueeze(0)       # [1, B, D]
-        es_vals = compute_es(et, tv, norm_p=norm_p).squeeze(0)  # → (B,)
-        if loss_type == "es":
-            L = es_vals
-        else:  # 'nes'
-            true_norm = torch.norm(tv, p=norm_p, dim=2).squeeze(0)   # (B,)
-            L = es_vals / (true_norm + 1e-8)
-    elif loss_type in ("kes", "nkes"):
-        et = ens_tensor.unsqueeze(0)
-        tv = true_v.unsqueeze(0)
-        kes_vals = compute_kernel_es(et, tv, sigma=kes_sigma).squeeze(0)
-        if loss_type == "kes":
-            L = kes_vals
-        else:  # 'nkes'
-            true_norm = torch.norm(tv, p=norm_p, dim=2).squeeze(0)
-            L = kes_vals / (true_norm + 1e-8)
-    else:
-        raise NotImplementedError(f"Loss type '{loss_type}' is not implemented")
-
-    mean_pen = torch.zeros_like(L)
     if lambda1 > 0.0:
         if H_info is None or A is None or B_mat is None or a is None:
             raise ValueError("Must pass H_info, A_mat, B_mat, a_vec to use lambda1>0")
@@ -365,9 +323,41 @@ def compute_loss_last(
         # L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
         # mean_pen = lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
         mean_pen = lambda1 * torch.norm(mean_diff, dim=1)
+        if return_sum:
+            return mean_pen.sum()
+        else:
+            return mean_pen.mean()
+    return torch.tensor(0.0, device=ens_tensor.device, requires_grad=False)
 
     # 5) If desired, analytic vs learned covariance matching
-    cov_pen = torch.zeros_like(L)
+def compute_cov_pen(
+    ens_tensor,       # [B, N, D]
+    true_v,           # [B, D]
+    loss_type,        # 'l2','nl2','rmse','es','nes','kes','nkes', etc.
+    valid_B_mask=None,# None or [B] bool mask
+    norm_p=1,
+    kes_sigma=1.0,
+    return_sum=False,
+    H_info=None,
+    ignore_first=0, 
+    A = None,
+    B_mat = None,
+    a = None,
+    args = None,
+    lambda2 = 0.0
+):
+    B, N, D = ens_tensor.shape
+
+    # 1) build mask over B
+    if valid_B_mask is None:
+        mask = torch.ones(B, dtype=torch.bool, device=ens_tensor.device)
+    else:
+        mask = valid_B_mask
+        if mask.ndim != 1 or mask.size(0) != B:
+            raise ValueError("valid_B_mask must be shape [B]")
+
+    # 2) collapse ensemble dim → [B, D]
+    ens_mean = ens_tensor.mean(dim=1)   # (B, D)
     if lambda2 > 0.0:
         if A is None or B_mat is None:
             raise ValueError("Must pass A_mat, B_mat to use lambda2>0")
@@ -403,20 +393,11 @@ def compute_loss_last(
         # L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
         # cov_pen = lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2))
         cov_pen = lambda2 * cov_fro
-
-    # 6) Mask and reduce over batch
-    L_valid = L[mask]
-    if L_valid.numel() == 0:
-        return torch.tensor(0.0, requires_grad=True)
-    
-    if lambda1 == 0:
-        mean_diff = torch.zeros_like(L_valid)
-    if lambda2 == 0:
-        cov_fro = torch.zeros_like(L_valid)
-    if return_sum:
-        return L_valid.sum(), mean_pen.sum(), cov_pen.sum()
-    else:
-        return L_valid.mean(), mean_pen.mean(), cov_pen.mean()
+        if return_sum:
+            return cov_pen.sum()
+        else:
+            return cov_pen.mean()
+    return torch.tensor(0.0, device=ens_tensor.device, requires_grad=False)
 
 
 class MultiLossUncertaintyWeight(nn.Module):

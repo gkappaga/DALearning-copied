@@ -10,7 +10,7 @@ from utils import AverageMeter, mystery_operator, get_mean_std
 from utils import plot_particle_trajectories_with_histograms
 from EnKF_utils import loc_EnKF_analysis, EnKF_analysis, post_process, mean0
 from localization import dist2coeff, create_loc_mat
-from loss import compute_loss, compute_es, compute_loss_last
+from loss import compute_loss, compute_es, compute_mean_pen, compute_cov_pen
 from networks import NaiveNetwork, SetTransformer, Simple_MLP
 
 def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=None):
@@ -255,6 +255,42 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                             args = args,
                                             lambda1 = args.lambda1,
                                             lambda2 = args.lambda2)
+                orig_loss = compute_loss(
+                    ens_tensor=ens_tensor,
+                    batch_v=batch_v,
+                    loss_type=args.loss_type,
+                    ignore_first=ignore_first,
+                    end_ind=None,
+                    valid_B_mask=valid_B_mask,
+                    norm_p=args.es_p,
+                    kes_sigma=args.kes_sigma
+                )
+                mean_penalty = compute_mean_pen(
+                    ens_tensor=ens_v_a,
+                    true_v=batch_v[i + 1],
+                    valid_B_mask=valid_B_mask,
+                    return_sum=True,
+                    H_info=H_info,
+                    ignore_first=ignore_first,
+                    A=A_mat,
+                    B_mat=B_mat,
+                    a=a_vec,
+                    args=args,
+                    lambda1=args.lambda1
+                )
+                cov_penalty = compute_cov_pen(
+                    ens_tensor=ens_v_a,
+                    true_v=batch_v[i + 1],
+                    valid_B_mask=valid_B_mask,
+                    return_sum=True,
+                    H_info=H_info,
+                    ignore_first=ignore_first,
+                    A=A_mat,
+                    B_mat=B_mat,
+                    a=a_vec,
+                    args=args,
+                    lambda2=args.lambda2
+                )
                 loss += orig_loss + mean_penalty + cov_penalty
                 running_orig_loss += orig_loss.item()
                 running_mean_pen += mean_penalty.item()
