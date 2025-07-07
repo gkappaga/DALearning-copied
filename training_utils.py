@@ -44,12 +44,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     epoch_cov_penalty  = 0.0
     mc_batches         = 0
     total_mc_batches = 0
-    # epoch_orig_penalty = AverageMeter()
-    # epoch_mean_penalty = AverageMeter()
-    # epoch_cov_penalty  = AverageMeter()
-    epoch_orig_penalty = 0
-    epoch_mean_penalty = 0
-    epoch_cov_penalty  = 0
+    epoch_orig_penalty = AverageMeter()
+    epoch_mean_penalty = AverageMeter()
+    epoch_cov_penalty  = AverageMeter()
     count = 0
     for batch_ind, batch_v in enumerate(loader):
         t_start = time.time()
@@ -387,13 +384,14 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                         return_sum=False,
                     )
                     loss = orig_loss + mean_penalty + cov_penalty 
+                    epoch_orig_penalty.update(orig_loss.item(), torch.sum(valid_B_mask))
+                    epoch_mean_penalty.update(mean_penalty.item(), torch.sum(valid_B_mask))
+                    epoch_cov_penalty.update(cov_penalty.item(), torch.sum(valid_B_mask))
 
                 success_count += torch.sum(valid_B_mask)
                 # loss = loss / mc_batches
                 pen_str = f'| Orig {orig_loss:.4f} MeanPen {mean_penalty:.4f} CovPen {cov_penalty:.4f}'
                 losses.update(loss.item(), torch.sum(valid_B_mask))
-
-
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.zero_grad()
                 loss.backward()
@@ -437,8 +435,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     scheduler.step()
 
     if args.mc_penalty:
-        # return losses.avg, epoch_mean_penalty.avg, epoch_cov_penalty.avg, epoch_orig_penalty.avg
-        return losses.avg, epoch_mean_penalty / count, epoch_cov_penalty / count, epoch_orig_penalty / count
+        return losses.avg, epoch_mean_penalty.avg, epoch_cov_penalty.avg, epoch_orig_penalty.avg
+        # return losses.avg, epoch_mean_penalty / count, epoch_cov_penalty / count, epoch_orig_penalty / count
     else:
         return losses.avg
 
