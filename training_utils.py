@@ -299,8 +299,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # total_mc_batches += 1
             
                        
-            if epoch <= args.detach_training_epoch: # if epoch % 5 == 0:
-            # if epoch % 5 == 0:
+            # if epoch <= args.detach_training_epoch: # if epoch % 5 == 0:
+            if epoch % 5 == 0:
                 ens_v_a = ens_v_a.detach()
 
         # Concat outputs
