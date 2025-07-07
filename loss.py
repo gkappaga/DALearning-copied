@@ -427,15 +427,13 @@ def compute_mean_pen(
     Vp = ens_tensor - v_bar.unsqueeze(2)           # [T, B, N, D]
     Hp = hv         - y_bar.unsqueeze(2)           # [T, B, N, d]
 
-    # sample covariances via matmul
-    #   Vp.transpose(-1,-2): [T,B,D,N], Vp: [T,B,N,D] → Cvv: [T,B,D,D]
     Cvv = torch.matmul(Vp.transpose(-1,-2), Vp) / (N-1)
     Cyy = torch.matmul(Hp.transpose(-1,-2), Hp) / (N-1)
     Cvy = torch.matmul(Vp.transpose(-1,-2), Hp) / (N-1)
 
     # safe inverse of Cyy
     eps  = getattr(args, "cov_eps", 1e-3)
-    eye_d = torch.eye(d, device=ens_tensor.device).view(1,1,d,d)
+    eye_d = torch.eye(Cyy.shape[-1], device=ens_tensor.device).view(1,1,Cyy.shape[-1],Cyy.shape[-1])
     Cyy_j = Cyy + eps * eye_d
     Cyy_inv = torch.linalg.inv(Cyy_j)              # [T,B,d,d]
 
@@ -496,7 +494,7 @@ def compute_cov_pen(
 
     # safe inverse of Cyy
     eps  = getattr(args, "cov_eps", 1e-3)
-    eye_d = torch.eye(d, device=ens_tensor.device).view(1,1,d,d)
+    eye_d = torch.eye(Cyy.shape[-1], device=ens_tensor.device).view(1,1,Cyy.shape[-1],Cyy.shape[-1])
     Cyy_j = Cyy + eps * eye_d
     Cyy_inv = torch.linalg.inv(Cyy_j)              # [T,B,d,d]
 
