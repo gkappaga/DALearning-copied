@@ -366,26 +366,25 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     mean_penalty = compute_mean_pen(
                         ens_tensor=ens_tensor,
                         true_v=batch_v,
-                        valid_B_mask=valid_B_mask,
-                        return_sum=False,
-                        H_info=H_info,
-                        # ignore_first=ignore_first,
                         A=A_mat,
                         B_mat=B_mat,
                         a=a_vec,
+                        H_info=H_info,
                         args=args,
-                        lambda1=args.lambda1
+                        lambda1=args.lambda1,
+                        valid_mask=valid_B_mask,
+                        return_sum=False,
+                        # ignore_first=ignore_first,
                     )
                     cov_penalty = compute_cov_pen(
                         ens_tensor=ens_tensor,
-                        valid_B_mask=valid_B_mask,
-                        return_sum=False,
-                        H_info=H_info,
                         A=A_mat,
                         B_mat=B_mat,
-                        a=a_vec,
+                        H_info=H_info,
                         args=args,
-                        lambda2=args.lambda2
+                        lambda2=args.lambda2,
+                        valid_mask=valid_B_mask,
+                        return_sum=False,
                     )
                     loss = orig_loss + mean_penalty + cov_penalty 
 
