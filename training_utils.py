@@ -354,8 +354,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     orig_loss = 0
                     for loss_type in args.loss_type:
                         orig_loss += compute_loss(
-                            ens_tensor=ens_v_a.unsqueeze(0),
-                            batch_v=batch_v[i + 1].unsqueeze(0),
+                            ens_tensor=ens_tensor,
+                            batch_v=batch_v,
                             loss_type=loss_type,
                             # ignore_first=ignore_first,
                             end_ind=None,
@@ -364,7 +364,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                             kes_sigma=args.kes_sigma
                         )
                     mean_penalty = compute_mean_pen(
-                        ens_tensor=ens_v_a,
+                        ens_tensor=ens_tensor,
                         true_v=batch_v,
                         valid_B_mask=valid_B_mask,
                         return_sum=False,
@@ -377,7 +377,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                         lambda1=args.lambda1
                     )
                     cov_penalty = compute_cov_pen(
-                        ens_tensor=ens_v_a,
+                        ens_tensor=ens_tensor,
                         valid_B_mask=valid_B_mask,
                         return_sum=False,
                         H_info=H_info,
