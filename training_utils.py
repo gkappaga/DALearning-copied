@@ -365,7 +365,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                         )
                     mean_penalty = compute_mean_pen(
                         ens_tensor=ens_tensor,
-                        true_states=batch_v,
+                        true_v=batch_v,
                         valid_B_mask=valid_B_mask,
                         return_sum=False,
                         H_info=H_info,
