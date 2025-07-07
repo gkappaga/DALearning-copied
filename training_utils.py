@@ -256,6 +256,52 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 #                             args = args,
                 #                             lambda1 = args.lambda1,
                 #                             lambda2 = args.lambda2)
+                # orig_loss = 0
+                # for loss_type in args.loss_type:
+                #     orig_loss += compute_loss(
+                #         ens_tensor=ens_v_a.unsqueeze(0),
+                #         batch_v=batch_v[i + 1].unsqueeze(0),
+                #         loss_type=loss_type,
+                #         # ignore_first=ignore_first,
+                #         end_ind=None,
+                #         valid_B_mask=valid_B_mask,
+                #         norm_p=args.es_p,
+                #         kes_sigma=args.kes_sigma
+                #     )
+                # mean_penalty = compute_mean_pen(
+                #     ens_tensor=ens_v_a,
+                #     true_v=batch_v[i + 1],
+                #     valid_B_mask=valid_B_mask,
+                #     return_sum=False,
+                #     H_info=H_info,
+                #     # ignore_first=ignore_first,
+                #     A=A_mat,
+                #     B_mat=B_mat,
+                #     a=a_vec,
+                #     args=args,
+                #     lambda1=args.lambda1
+                # )
+                # cov_penalty = compute_cov_pen(
+                #     ens_tensor=ens_v_a,
+                #     valid_B_mask=valid_B_mask,
+                #     return_sum=False,
+                #     H_info=H_info,
+                #     A=A_mat,
+                #     B_mat=B_mat,
+                #     a=a_vec,
+                #     args=args,
+                #     lambda2=args.lambda2
+                # )
+                # step_loss = orig_loss + mean_penalty + cov_penalty
+                # loss = step_loss if loss is None else loss + step_loss
+                # # loss += orig_loss + mean_penalty + cov_penalty
+                # running_orig_loss += orig_loss.item()
+                # running_mean_pen += mean_penalty.item()
+                # running_cov_pen += cov_penalty.item()
+                # mc_batches += 1
+                # total_mc_batches += 1
+            
+            if args.mc_penalty:
                 orig_loss = 0
                 for loss_type in args.loss_type:
                     orig_loss += compute_loss(
@@ -270,7 +316,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     )
                 mean_penalty = compute_mean_pen(
                     ens_tensor=ens_v_a,
-                    true_v=batch_v[i + 1],
+                    true_v=batch_v,
                     valid_B_mask=valid_B_mask,
                     return_sum=False,
                     H_info=H_info,
@@ -292,15 +338,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     args=args,
                     lambda2=args.lambda2
                 )
-                step_loss = orig_loss + mean_penalty + cov_penalty
-                loss = step_loss if loss is None else loss + step_loss
-                # loss += orig_loss + mean_penalty + cov_penalty
-                running_orig_loss += orig_loss.item()
-                running_mean_pen += mean_penalty.item()
-                running_cov_pen += cov_penalty.item()
-                mc_batches += 1
-                total_mc_batches += 1
-            
+                loss = orig_loss + mean_penalty + cov_penalty            
             if epoch <= args.detach_training_epoch: # if epoch % 5 == 0:
             # if epoch % 5 == 0:
                 ens_v_a = ens_v_a.detach()
@@ -361,7 +399,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 #                         kes_sigma=args.kes_sigma)
 
                 success_count += torch.sum(valid_B_mask)
-                loss = loss / mc_batches
+                # loss = loss / mc_batches
                 losses.update(loss.item(), torch.sum(valid_B_mask))
 
                 # print("LOSS REQUIRES GRAD?", loss.requires_grad)
