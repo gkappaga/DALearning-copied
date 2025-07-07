@@ -449,6 +449,7 @@ def compute_mean_pen(
     # L2 distance per (t,b)
     mean_diff = m_th - m_nn                          # [T,B,D]
     mean_pen  = lambda1 * mean_diff.norm(dim=2) / torch.norm(m_th, p='fro', dim=(2))  # [T,B]
+    print(torch.norm(m_th, p='fro', dim=(2)))
 
     if valid_mask is not None:
         mean_pen = mean_pen.masked_fill(~valid_mask, 0.)
@@ -511,6 +512,7 @@ def compute_cov_pen(
     # Frobenius‐norm difference
     cov_fro = (Cov_pred - Cov_true).norm(p='fro', dim=(2,3))      # [T,B]
     cov_pen = lambda2 * cov_fro / torch.norm(Cov_true, p='fro', dim = (2,3))   # [T,B]
+    print(torch.norm(Cov_true, p='fro', dim = (2,3)))
 
     if valid_mask is not None:
         cov_pen = cov_pen.masked_fill(~valid_mask, 0.)
