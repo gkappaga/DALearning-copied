@@ -411,56 +411,53 @@ def compute_mean_pen(
     Trajectory‐wise mean‐matching penalty.
     """
     if lambda1 <= 0:
-        # no penalty, but preserve grad‐graph if someone mistakenly hooks it in
-        out = torch.zeros((), device=ens_tensor.device, requires_grad=False)
-        return out
+        return torch.zeros((), device=ens_tensor.device)
 
     H_fun, H = H_info
     T, B, N, D = ens_tensor.shape
     d = H.shape[0]
 
-    # compute ensemble & obs‐means at each t
-    v_bar = ens_tensor.mean(dim=2)                  # [T,B,D]
-    hv    = H_fun(ens_tensor)                       # [T,B,N,d]
-    y_bar = hv.mean(dim=2)                          # [T,B,d]
-    y_obs = H_fun(true_v.unsqueeze(2)).squeeze(2)   # [T,B,d]
+    # time‐wise ensemble means
+    v_bar = ens_tensor.mean(dim=2)                 # [T, B, D]
+    hv    = H_fun(ens_tensor)                      # [T, B, N, d]
+    y_bar = hv.mean(dim=2)                         # [T, B, d]
+    y_obs = H_fun(true_v.unsqueeze(2)).squeeze(2)  # [T, B, d]
 
-    # sample covariances at each t
-    Vp = ens_tensor - v_bar.unsqueeze(2)            # [T,B,N,D]
-    Hp = hv         - y_bar.unsqueeze(2)            # [T,B,N,d]
-    # Cvv, Cyy, Cvy: [T,B,*,*]
-    Cvv = torch.einsum('tbind,tbjnd->tbij', Vp, Vp) / (N-1)
-    Cyy = torch.einsum('tbind,tbjnd->tbij', Hp, Hp) / (N-1)
-    Cvy = torch.einsum('tbind,tbjnd->tbij', Vp, Hp) / (N-1)
+    # perturbations about the mean
+    Vp = ens_tensor - v_bar.unsqueeze(2)           # [T, B, N, D]
+    Hp = hv         - y_bar.unsqueeze(2)           # [T, B, N, d]
 
-    # invert safely
-    eps = getattr(args, 'cov_eps', 1e-3)
-    Iyy = torch.eye(d, device=ens_tensor.device).view(1,1,d,d).expand(T,B,d,d)
-    Cyy_j = Cyy + eps * Iyy
-    Cyy_inv = torch.linalg.inv(Cyy_j)               # [T,B,d,d]
+    # sample covariances via matmul
+    #   Vp.transpose(-1,-2): [T,B,D,N], Vp: [T,B,N,D] → Cvv: [T,B,D,D]
+    Cvv = torch.matmul(Vp.transpose(-1,-2), Vp) / (N-1)
+    Cyy = torch.matmul(Hp.transpose(-1,-2), Hp) / (N-1)
+    Cvy = torch.matmul(Vp.transpose(-1,-2), Hp) / (N-1)
 
-    # analytic posterior means
-    innov = (y_obs - y_bar).unsqueeze(-1)            # [T,B,d,1]
-    m_th = v_bar + torch.matmul(Cvy, torch.matmul(Cyy_inv, innov)).squeeze(-1)  # [T,B,D]
+    # safe inverse of Cyy
+    eps  = getattr(args, "cov_eps", 1e-3)
+    eye_d = torch.eye(d, device=ens_tensor.device).view(1,1,d,d)
+    Cyy_j = Cyy + eps * eye_d
+    Cyy_inv = torch.linalg.inv(Cyy_j)              # [T,B,d,d]
 
-    # learned posterior means
-    # A: [T,B,D,D], v_bar: [T,B,D]
-    m1 = torch.einsum('tbij,tbj->tbi', A, v_bar)
-    m2 = torch.einsum('tbij,tbj->tbi', B_mat, y_bar)
-    m_nn = m1 + m2 + a                              # [T,B,D]
+    # analytic posterior mean m_th = v_bar + Cvy Cyy^{-1} (y_obs - y_bar)
+    innov = (y_obs - y_bar).unsqueeze(-1)           # [T,B,d,1]
+    m_th = v_bar + (Cvy @ (Cyy_inv @ innov)).squeeze(-1)  # [T,B,D]
 
-    # L2 distance at each (t,b)
-    mean_diff = m_th - m_nn                         # [T,B,D]
-    mean_pen  = lambda1 * mean_diff.norm(dim=2)     # [T,B]
+    # learned posterior mean m_nn = A v_bar + B y_bar + a
+    m_nn  = (A    @ v_bar.unsqueeze(-1)).squeeze(-1) \
+          + (B_mat @ y_bar.unsqueeze(-1)).squeeze(-1) \
+          + a                                            # [T,B,D]
 
-    # mask out
+    # L2 distance per (t,b)
+    mean_diff = m_th - m_nn                          # [T,B,D]
+    mean_pen  = lambda1 * mean_diff.norm(dim=2)      # [T,B]
+
     if valid_mask is not None:
         mean_pen = mean_pen.masked_fill(~valid_mask, 0.)
 
     if return_sum:
         return mean_pen.sum()
     else:
-        # divide by total number of valid entries
         denom = valid_mask.sum() if valid_mask is not None else (T*B)
         return mean_pen.sum() / denom
 
@@ -479,48 +476,43 @@ def compute_cov_pen(
     Trajectory‐wise covariance‐matching penalty.
     """
     if lambda2 <= 0:
-        return torch.zeros((), device=ens_tensor.device, requires_grad=False)
+        return torch.zeros((), device=ens_tensor.device)
 
     H_fun, H = H_info
     T, B, N, D = ens_tensor.shape
     d = H.shape[0]
 
-    # re‐compute population covariances
-    v_bar = ens_tensor.mean(dim=2)                  # [T,B,D]
-    hv    = H_fun(ens_tensor)                       # [T,B,N,d]
-    y_bar = hv.mean(dim=2)                          # [T,B,d]
-    Vp = ens_tensor - v_bar.unsqueeze(2)            # [T,B,N,D]
-    Hp = hv         - y_bar.unsqueeze(2)            # [T,B,N,d]
+    # recompute means & perturbations
+    v_bar = ens_tensor.mean(dim=2)                 # [T,B,D]
+    hv    = H_fun(ens_tensor)                      # [T,B,N,d]
+    y_bar = hv.mean(dim=2)                         # [T,B,d]
+    Vp    = ens_tensor - v_bar.unsqueeze(2)        # [T,B,N,D]
+    Hp    = hv         - y_bar.unsqueeze(2)        # [T,B,N,d]
 
-    Cvv = torch.einsum('tbind,tbjnd->tbij', Vp, Vp) / (N-1)
-    Cyy = torch.einsum('tbind,tbjnd->tbij', Hp, Hp) / (N-1)
-    Cvy = torch.einsum('tbind,tbjnd->tbij', Vp, Hp) / (N-1)
+    # sample covariances
+    Cvv = torch.matmul(Vp.transpose(-1,-2), Vp) / (N-1)
+    Cyy = torch.matmul(Hp.transpose(-1,-2), Hp) / (N-1)
+    Cvy = torch.matmul(Vp.transpose(-1,-2), Hp) / (N-1)
 
-    # invert
-    eps = getattr(args, 'cov_eps', 1e-3)
-    Iyy = torch.eye(d, device=ens_tensor.device).view(1,1,d,d).expand(T,B,d,d)
-    Cyy_j = Cyy + eps * Iyy
-    Cyy_inv = torch.linalg.inv(Cyy_j)               # [T,B,d,d]
+    # safe inverse of Cyy
+    eps  = getattr(args, "cov_eps", 1e-3)
+    eye_d = torch.eye(d, device=ens_tensor.device).view(1,1,d,d)
+    Cyy_j = Cyy + eps * eye_d
+    Cyy_inv = torch.linalg.inv(Cyy_j)              # [T,B,d,d]
 
-    # true posterior covariance at each t
-    Cov_true = Cvv - torch.matmul(Cvy, torch.matmul(Cyy_inv, Cvy.transpose(-2,-1)))  # [T,B,D,D]
+    # true posterior cov: Cov_true = Cvv - Cvy Cyy^{-1} Cvy^T
+    Cov_true = Cvv - (Cvy @ (Cyy_inv @ Cvy.transpose(-2,-1)))  # [T,B,D,D]
 
-    # learned posterior covariance at each t
-    # term1 = A Cvv A^T
-    term1 = torch.matmul(A, torch.matmul(Cvv, A.transpose(-2,-1)))
-    # term2 = A Cvy B^T
-    term2 = torch.matmul(A, torch.matmul(Cvy, B_mat.transpose(-2,-1)))
-    # term3 = B Cvy^T A^T
+    # learned posterior cov:
+    term1 = A    @ (Cvv @ A.transpose(-2,-1))
+    term2 = A    @ (Cvy @ B_mat.transpose(-2,-1))
     term3 = term2.transpose(-2,-1)
-    # term4 = B Cyy B^T
-    term4 = torch.matmul(B_mat, torch.matmul(Cyy, B_mat.transpose(-2,-1)))
+    term4 = B_mat @ (Cyy @ B_mat.transpose(-2,-1))
+    Cov_pred = term1 + term2 + term3 + term4                     # [T,B,D,D]
 
-    Cov_pred = term1 + term2 + term3 + term4    # [T,B,D,D]
-
-    # Frobenius norm difference
-    cov_diff = Cov_pred - Cov_true              # [T,B,D,D]
-    cov_fro = cov_diff.norm(p='fro', dim=(2,3)) # [T,B]
-    cov_pen = lambda2 * cov_fro                 # [T,B]
+    # Frobenius‐norm difference
+    cov_fro = (Cov_pred - Cov_true).norm(p='fro', dim=(2,3))      # [T,B]
+    cov_pen = lambda2 * cov_fro                                   # [T,B]
 
     if valid_mask is not None:
         cov_pen = cov_pen.masked_fill(~valid_mask, 0.)
