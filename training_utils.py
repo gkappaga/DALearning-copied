@@ -292,6 +292,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     args=args,
                     lambda2=args.lambda2
                 )
+                print("mean_pen.requires_grad =", mean_penalty.requires_grad)
+                print("cov_pen.requires_grad  =", cov_penalty.requires_grad)
+                print("mean_pen.grad_fn  =", mean_penalty.grad_fn)
+                print("cov_pen.grad_fn   =", cov_penalty.grad_fn)
                 step_loss = orig_loss + mean_penalty + cov_penalty
                 loss = step_loss if loss is None else loss + step_loss
                 # loss += orig_loss + mean_penalty + cov_penalty
