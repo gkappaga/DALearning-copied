@@ -32,8 +32,8 @@ python train.py \
     --epochs 100 \
     --save_epoch 10 \
     --mc_penalty True \
-    --lambda1 0.5 \
-    --lambda2 0.5
+    --lambda1 0.001 \
+    --lambda2 0.001
 
 # python train.py \
 #     --dataset lorenz96 \

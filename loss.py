@@ -481,35 +481,29 @@ def compute_cov_pen(
     T, B, N, D = ens_tensor.shape
     d = H.shape[0]
 
-    # recompute means & perturbations
     v_bar = ens_tensor.mean(dim=2)                 # [T,B,D]
     hv    = H_fun(ens_tensor)                      # [T,B,N,d]
     y_bar = hv.mean(dim=2)                         # [T,B,d]
     Vp    = ens_tensor - v_bar.unsqueeze(2)        # [T,B,N,D]
     Hp    = hv         - y_bar.unsqueeze(2)        # [T,B,N,d]
 
-    # sample covariances
     Cvv = torch.matmul(Vp.transpose(-1,-2), Vp) / (N-1)
     Cyy = torch.matmul(Hp.transpose(-1,-2), Hp) / (N-1)
     Cvy = torch.matmul(Vp.transpose(-1,-2), Hp) / (N-1)
 
-    # safe inverse of Cyy
     eps  = getattr(args, "cov_eps", 1e-3)
     eye_d = torch.eye(Cyy.shape[-1], device=ens_tensor.device).view(1,1,Cyy.shape[-1],Cyy.shape[-1])
     Cyy_j = Cyy + eps * eye_d
     Cyy_inv = torch.linalg.inv(Cyy_j)              # [T,B,d,d]
 
-    # true posterior cov: Cov_true = Cvv - Cvy Cyy^{-1} Cvy^T
     Cov_true = Cvv - (Cvy @ (Cyy_inv @ Cvy.transpose(-2,-1)))  # [T,B,D,D]
 
-    # learned posterior cov:
     term1 = A    @ (Cvv @ A.transpose(-2,-1))
     term2 = A    @ (Cvy @ B_mat.transpose(-2,-1))
     term3 = term2.transpose(-2,-1)
     term4 = B_mat @ (Cyy @ B_mat.transpose(-2,-1))
     Cov_pred = term1 + term2 + term3 + term4                     # [T,B,D,D]
 
-    # Frobenius‐norm difference
     cov_fro = (Cov_pred - Cov_true).norm(p='fro', dim=(2,3))      # [T,B]
     cov_pen = lambda2 * cov_fro / torch.norm(Cov_true, p='fro', dim = (2,3))   # [T,B]
     print(torch.norm(Cov_true, p='fro', dim = (2,3)))
