@@ -33,7 +33,7 @@ python train.py \
     --save_epoch 10 \
     --loss_type 'nes' \
     --mc_penalty True \
-    --lambda1 0.001 \
+    --lambda1 0.0001 \
     --lambda2 0.001
 
 # python train.py \
