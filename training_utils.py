@@ -422,7 +422,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         #         count += 1
         # else:
         #     pen_str = ''
-
+        if not args.mc_penalty:
+            pen_str = ''
         if (batch_ind + 1) % args.print_batch == 0:
             print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}]\t'
                 f'Batch time {batch_time.val:.3f} (Avg: {batch_time.avg:.3f})\t'
