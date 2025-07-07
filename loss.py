@@ -324,9 +324,9 @@ def compute_mean_pen(
         # mean_pen = lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
         mean_pen = lambda1 * torch.norm(mean_diff, dim=1)
         if return_sum:
-            return torch.tensor(mean_pen.sum(), device=ens_tensor.device, requires_grad=True)
+            return mean_pen.sum()
         else:
-            return torch.tensor(mean_pen.mean(), device=ens_tensor.device, requires_grad=True)
+            return mean_pen.mean()
     return torch.tensor(0.0, device=ens_tensor.device, requires_grad=False)
 
     # 5) If desired, analytic vs learned covariance matching
@@ -389,9 +389,9 @@ def compute_cov_pen(
         # cov_pen = lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2))
         cov_pen = lambda2 * cov_fro
         if return_sum:
-            return torch.tensor(cov_pen.sum(), device=ens_tensor.device, requires_grad=True)
+            return cov_pen.sum()
         else:
-            return torch.tensor(cov_pen.mean(), device=ens_tensor.device, requires_grad=True)
+            return cov_pen.mean()
     return torch.tensor(0.0, device=ens_tensor.device, requires_grad=False)
 
 
