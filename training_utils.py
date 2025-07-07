@@ -390,6 +390,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
                 success_count += torch.sum(valid_B_mask)
                 # loss = loss / mc_batches
+                pen_str = f'| Orig {orig_loss:.4f} MeanPen {mean_penalty:.4f} CovPen {cov_penalty:.4f}'
                 losses.update(loss.item(), torch.sum(valid_B_mask))
 
 
@@ -409,20 +410,20 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             loss = torch.tensor(float('nan')) 
             losses.update(loss.item(), 1)
         
-        if args.mc_penalty and total_mc_batches > 0:
-                avg_orig_pen = running_orig_loss / total_mc_batches
-                # epoch_orig_penalty.update(avg_orig_pen, 1)
-                epoch_orig_penalty += float(avg_orig_pen)
-                avg_mean_pen = running_mean_pen / total_mc_batches
-                # epoch_mean_penalty.update(avg_mean_pen, 1)
-                epoch_mean_penalty += float(avg_mean_pen)
-                avg_cov_pen  = running_cov_pen  / total_mc_batches
-                # epoch_cov_penalty.update(avg_cov_pen, 1)
-                epoch_cov_penalty += float(avg_cov_pen)
-                pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
-                count += 1
-        else:
-            pen_str = ''
+        # if args.mc_penalty and total_mc_batches > 0:
+        #         avg_orig_pen = running_orig_loss / total_mc_batches
+        #         # epoch_orig_penalty.update(avg_orig_pen, 1)
+        #         epoch_orig_penalty += float(avg_orig_pen)
+        #         avg_mean_pen = running_mean_pen / total_mc_batches
+        #         # epoch_mean_penalty.update(avg_mean_pen, 1)
+        #         epoch_mean_penalty += float(avg_mean_pen)
+        #         avg_cov_pen  = running_cov_pen  / total_mc_batches
+        #         # epoch_cov_penalty.update(avg_cov_pen, 1)
+        #         epoch_cov_penalty += float(avg_cov_pen)
+        #         pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
+        #         count += 1
+        # else:
+        #     pen_str = ''
 
         if (batch_ind + 1) % args.print_batch == 0:
             print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}]\t'
