@@ -31,7 +31,7 @@ python train.py \
     --v 'Affine' \
     --epochs 100 \
     --save_epoch 10 \
-    --loss_type 'nes'
+    --loss_type 'nes' \
     --mc_penalty True \
     --lambda1 0 \
     --lambda2 0.001
