@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import warnings
 
 def compute_es(ens_states, true_states, norm_p=1):
     """
@@ -31,6 +30,15 @@ def compute_es(ens_states, true_states, norm_p=1):
     
     term_obs = torch.mean(dist_to_true, dim=2)  # Shape: [T, B]
     
+    # Second term: (1/2) * E_F[||X - X'||^norm_p]
+    # Approximate E_F by averaging over distinct pairs of ensemble members.
+    # sum_{i!=j} ||x_i - x_j||^p / (N*(N-1))
+    
+    # Efficiently calculate sum of pairwise distances between ensemble members
+    # This avoids explicit loops for better performance if N is large,
+    # but for clarity and given typical N, loops are acceptable as in original code.
+    # Here, we stick to the loop for clarity and consistency with original.
+    
     sum_pairwise_dist = torch.zeros(T, B, device=ens_states.device, dtype=ens_states.dtype)
     for i in range(N):
         for j in range(i + 1, N): # Iterate over distinct pairs (i < j)
@@ -39,7 +47,11 @@ def compute_es(ens_states, true_states, norm_p=1):
                 dist_pair = torch.pow(dist_pair, norm_p)
             sum_pairwise_dist += dist_pair
             
-    term_pair_expectation = (2 * sum_pairwise_dist) / (N ** 2) # Shape: [T, B]
+    # Average over N*(N-1)/2 distinct pairs for E_F[||X - X'||^norm_p]
+    # The sum_{i!=j} has N*(N-1) terms. sum_{i<j} has N*(N-1)/2 terms.
+    # E_F[||X - X'||^p] is approximated by ( sum_{i<j} ||x_i - x_j||^p ) / (N*(N-1)/2)
+    # which is (2 * sum_pairwise_dist) / (N * (N-1))
+    term_pair_expectation = (2 * sum_pairwise_dist) / (N * (N - 1)) # Shape: [T, B]
     
     es = term_obs - 0.5 * term_pair_expectation  # Shape: [T, B]
     return es
@@ -115,14 +127,14 @@ def compute_kernel_es(ens_states, true_states, sigma=None):
                 sum_pairwise_kernel += k_pair.squeeze(-1).squeeze(-1)  # Accumulate [T, B]
 
         # E_F[k(X, X')] approximated by average over N*(N-1)/2 distinct pairs
-        term2_ef_k_xx_prime_avg = (2 * sum_pairwise_kernel) / (N ** 2) # Shape: [T, B]
+        term2_ef_k_xx_prime_avg = (2 * sum_pairwise_kernel) / (N * (N - 1)) # Shape: [T, B]
     
     kernel_es_val = -term1_ef_k_xy + 0.5 * term2_ef_k_xx_prime_avg
     return kernel_es_val
 
 
 def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None, 
-                 valid_B_mask=None, norm_p=1, kes_sigma=1, return_sum=False, normalize_val=None):
+                 valid_B_mask=None, norm_p=1, kes_sigma=1, return_sum=False):
     """
     Computes loss. Supports various types including L2, ES, and kernel ES.
 
@@ -130,27 +142,21 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
         ens_tensor (torch.Tensor): Ensemble predictions. Shape: [T, B, N, D].
         batch_v (torch.Tensor): Ground truth. Shape: [T, B, D].
         loss_type (str): Type of loss: 'l2', 'nl2' (normalized L2), 'rmse', 
-                        'es', 'nes' (normalized ES), 'tnes' (trajectory normalized ES),
-                        'kes' (kernel ES), 'nkes' (normalized kES), 'tnkes' (trajectory normalized kES).
+                         'es', 'nes' (normalized ES), 'tnes' (trajectory normalized ES),
+                         'kes' (kernel ES), 'nkes' (normalized kES), 'tnkes' (trajectory normalized kES).
         ignore_first (int): Number of initial time steps to ignore.
         end_ind (int, optional): Last time step index to consider. Defaults to end of trajectory.
         valid_B_mask (torch.Tensor, optional): Boolean mask for valid batch items.
-                                            Shape: [B] or [T, B]. Defaults to all valid.
+                                               Shape: [B] or [T, B]. Defaults to all valid.
         norm_p (int, float): Exponent for distances in ES (classical ES uses 1 for this exponent,
-                            meaning the L2 norm itself, not L2 norm squared).
-                            Also used as p for torch.norm in normalization terms for NES, NKES.
+                             meaning the L2 norm itself, not L2 norm squared).
+                             Also used as p for torch.norm in normalization terms for NES, NKES.
         kes_sigma (float): Bandwidth sigma for kernel ES.
         return_sum (bool): If True, returns sum of losses over valid elements. Else, returns mean.
 
     Returns:
         torch.Tensor: Computed loss (scalar).
     """
-    _, B, D = batch_v.shape
-    if normalize_val is not None:
-        assert normalize_val.shape == (B, D), f"and normalize_val should have the shape ({B}, {D}), but found: {batch_v.shape}"
-        batch_v = batch_v / normalize_val.unsqueeze(0)
-        ens_tensor = ens_tensor / normalize_val.unsqueeze(1).unsqueeze(0)
-    
     full_time_steps = batch_v.size(0)
     
     if end_ind is None:
@@ -190,7 +196,7 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
         loss_values_per_element = compute_es(ens_states_timed, true_states_timed, norm_p=norm_p)
     elif loss_type == 'nes' or loss_type == 'tnes':
         es_vals = compute_es(ens_states_timed, true_states_timed, norm_p=norm_p) # Shape [T_slice, B]
-        true_norm_vals = torch.norm(true_states_timed, p=2, dim=2) ** norm_p # Shape [T_slice, B]
+        true_norm_vals = torch.norm(true_states_timed, p=norm_p, dim=2) # Shape [T_slice, B]
         if loss_type == 'nes':
             loss_values_per_element = es_vals / (true_norm_vals + 1e-8)
         else: # tnes
@@ -243,6 +249,152 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
     else:
         return torch.mean(masked_loss_values)
     
+# import torch
+
+# def compute_mean_pen(
+#     ens_tensor,       # [B, N, D]
+#     true_v,           # [B, D]
+#     valid_B_mask=None,# None or [B] bool mask
+#     return_sum=False,
+#     H_info=None,
+#     A = None,
+#     B_mat = None,
+#     a = None,
+#     args = None,
+#     lambda1 = 0.0,
+# ):
+#     """
+#     Compute per‐batch loss for a single (latest) time‐step.
+#     """
+#     B, N, D = ens_tensor.shape
+
+#     # 1) build mask over B
+#     if valid_B_mask is None:
+#         mask = torch.ones(B, dtype=torch.bool, device=ens_tensor.device)
+#     else:
+#         mask = valid_B_mask
+#         if mask.ndim != 1 or mask.size(0) != B:
+#             raise ValueError("valid_B_mask must be shape [B]")
+
+#     # 2) collapse ensemble dim → [B, D]
+#     ens_mean = ens_tensor.mean(dim=1)   # (B, D)
+#     if lambda1 > 0.0:
+#         if H_info is None or A is None or B_mat is None or a is None:
+#             raise ValueError("Must pass H_info, A_mat, B_mat, a_vec to use lambda1>0")
+#         H_fun, H = H_info
+#         d = H.shape[0]
+
+#         # True observation at batch: [B,d]
+#         y_obs = H_fun(true_v.unsqueeze(1)).squeeze(1)  # (B,d)
+
+#         # Predicted obs from ensemble: [B,N,d]
+#         hv = H_fun(ens_tensor)                         # (B,N,d)
+
+#         # Sample means
+#         v_bar = ens_mean                              # (B,D)
+#         y_bar = hv.mean(dim=1)                        # (B,d)
+
+#         # Sample covariances
+#         Vp = ens_tensor - v_bar.unsqueeze(1)          # (B,N,D)
+#         Hp = hv         - y_bar.unsqueeze(1)          # (B,N,d)
+
+#         Cvv = torch.bmm(Vp.transpose(1,2), Vp)/(N-1)   # (B,D,D)
+#         Cyy = torch.bmm(Hp.transpose(1,2), Hp)/(N-1)   # (B,d,d)
+#         Cvy = torch.bmm(Vp.transpose(1,2), Hp)/(N-1)   # (B,D,d)
+
+#         # Invert Cyy safely
+#         eps = getattr(args, "cov_eps", 1e-3)
+#         Cyy_j = Cyy + eps * torch.eye(Cyy.shape[-1], device = args.device).unsqueeze(0)
+#         Cyy_inv = torch.inverse(Cyy_j)
+
+#         # Analytic posterior mean: v_bar + Cvy Cyy^{-1} (y_obs - y_bar)
+#         innov = (y_obs - y_bar).unsqueeze(-1)          # (B,d,1)
+#         m_th = v_bar + torch.bmm(Cvy, Cyy_inv).bmm(innov).squeeze(-1)  # (B,D)
+
+#         # learned mean
+#         m_nn = (
+#             torch.bmm(A, v_bar.unsqueeze(-1)).squeeze(-1) +
+#             torch.bmm(B_mat, y_bar.unsqueeze(-1)).squeeze(-1) +
+#             a
+#         )  # (B,D)
+
+#         # L2 norm penalty
+#         mean_diff = m_th - m_nn                    # (B,D)
+#         # L = L + lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
+#         # mean_pen = lambda1 * torch.norm(mean_diff, dim=1)/torch.norm(m_th, dim = 1)
+#         mean_pen = lambda1 * torch.norm(mean_diff, dim=1)
+#         if return_sum:
+#             return mean_pen.sum()
+#         else:
+#             return mean_pen.mean()
+#     return torch.tensor(0.0, device=ens_tensor.device, requires_grad=False)
+
+#     # 5) If desired, analytic vs learned covariance matching
+# def compute_cov_pen(
+#     ens_tensor,       # [B, N, D]
+#     valid_B_mask=None,# None or [B] bool mask
+#     return_sum=False,
+#     H_info=None,
+#     A = None,
+#     B_mat = None,
+#     a = None,
+#     args = None,
+#     lambda2 = 0.0
+# ):
+#     B, N, D = ens_tensor.shape
+
+#     # 1) build mask over B
+#     if valid_B_mask is None:
+#         mask = torch.ones(B, dtype=torch.bool, device=ens_tensor.device)
+#     else:
+#         mask = valid_B_mask
+#         if mask.ndim != 1 or mask.size(0) != B:
+#             raise ValueError("valid_B_mask must be shape [B]")
+
+#     # 2) collapse ensemble dim → [B, D]
+#     ens_mean = ens_tensor.mean(dim=1)   # (B, D)
+#     if lambda2 > 0.0:
+#         if A is None or B_mat is None:
+#             raise ValueError("Must pass A_mat, B_mat to use lambda2>0")
+
+#         # reuse Cvv, Cyy, Cvy from above, or recompute if lambda1==0
+#         H_fun, H = H_info
+#         if 'Cvv' not in locals():
+#             # recompute as in step 4
+#             hv = H_fun(ens_tensor); y_bar = hv.mean(dim=1)
+#             v_bar = ens_mean
+#             Vp, Hp = ens_tensor - v_bar.unsqueeze(1), hv - y_bar.unsqueeze(1)
+#             Cvv = torch.bmm(Vp.transpose(1,2), Vp)/(N-1)
+#             Cyy = torch.bmm(Hp.transpose(1,2), Hp)/(N-1)
+#             Cvy = torch.bmm(Vp.transpose(1,2), Hp)/(N-1)
+#             # Invert Cyy safely
+#             eps = getattr(args, "cov_eps", 1e-3)
+#             Cyy_j = Cyy + eps * torch.eye(Cyy.shape[-1], device = args.device).unsqueeze(0)
+#             Cyy_inv = torch.inverse(Cyy_j)
+
+#         # Predicted covariance
+#         term1 = A.bmm(Cvv).bmm(A.transpose(-2,-1))
+#         term2 = A.bmm(Cvy).bmm(B_mat.transpose(-2,-1))
+#         term3 = B_mat.bmm(Cvy.transpose(-2,-1)).bmm(A.transpose(-2,-1)) #just transpose term 2
+#         term4 = B_mat.bmm(Cyy).bmm(B_mat.transpose(-2,-1))
+#         Cov_pred = term1 + term2 + term3 + term4            # (B,D,D)
+
+#         # True covariance
+#         Cov_true = Cvv - torch.bmm(Cvy, Cyy_inv).bmm(Cvy.transpose(-2,-1))
+#         cov_diff = Cov_pred - Cov_true             # (B,D,D)
+
+#         # global Frobenius norm per batch
+#         cov_fro = torch.norm(cov_diff, p='fro', dim=(1,2))  # (B,)
+#         # L = L + lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2)) #divide by torch.norm(Cov_true, dim = (1, 2))
+#         # cov_pen = lambda2 * cov_fro/torch.norm(Cov_true, dim = (1,2))
+#         cov_pen = lambda2 * cov_fro
+#         if return_sum:
+#             return cov_pen.sum()
+#         else:
+#             return cov_pen.mean()
+#     return torch.tensor(0.0, device=ens_tensor.device, requires_grad=False)
+
+
 def compute_mean_pen(
     ens_tensor,   # [T, B, N, D]
     true_v,       # [T, B, D]
@@ -363,6 +515,8 @@ def compute_cov_pen(
         denom = valid_mask.sum() if valid_mask is not None else (T*B)
         return cov_pen.sum() / denom
 
+
+
 class MultiLossUncertaintyWeight(nn.Module):
     def __init__(self, num_losses):
         super(MultiLossUncertaintyWeight, self).__init__()
@@ -374,108 +528,6 @@ class MultiLossUncertaintyWeight(nn.Module):
             precision = torch.exp(-self.log_sigma[i]) # Corresponds to 1/sigma^2
             total_loss += precision * loss_val + 0.5 * self.log_sigma[i] # Maximize likelihood formulation
         return total_loss
-    
-
-
-def _sqrt_newton_schulz(A: torch.Tensor, num_iters: int = 10) -> torch.Tensor:
-    """
-    Computes the matrix square root of a batch of positive definite matrices.
-    Uses the Denman-Beavers iteration (also known as Newton-Schulz iteration)
-    for numerical computation.
-
-    Args:
-        A (torch.Tensor): The input batch of positive definite matrices of shape (..., d, d).
-        num_iters (int): The number of iterations.
-
-    Returns:
-        torch.Tensor: The matrix square root of A, with the same shape as A.
-    """
-    X = A.clone()
-    for _ in range(num_iters):
-        X_inv = torch.inverse(X)
-        X = 0.5 * (X + A @ X_inv)
-    return X
-
-
-def wasserstein2_multivariate_gaussian(
-    mean_true: torch.Tensor,
-    cov_true: torch.Tensor,
-    mean_sample: torch.Tensor,
-    cov_sample: torch.Tensor
-) -> torch.Tensor:
-    """
-    Computes the 2-Wasserstein distance between two batches of multivariate Gaussian distributions.
-
-    This function supports two input shapes for batching:
-    1. 3D mean tensor: (T, B, d), where T and B are batch dimensions.
-    2. 2D mean tensor: (B, d), where B is the batch dimension.
-
-    The output shape will match the batch dimensions of the input.
-
-    Formula: W_2^2(N_1, N_2) = ||μ_1 - μ_2||_2^2 + Tr(Σ_1 + Σ_2 - 2 * (Σ_1^{1/2} Σ_2 Σ_1^{1/2})^{1/2})
-
-    Args:
-        mean_true (torch.Tensor): Means of the true distributions, shape (T, B, d) or (B, d).
-        cov_true (torch.Tensor): Covariances of the true distributions, shape (T, B, d, d) or (B, d, d).
-        mean_sample (torch.Tensor): Means of the sample distributions, shape (T, B, d) or (B, d).
-        cov_sample (torch.Tensor): Covariances of the sample distributions, shape (T, B, d, d) or (B, d, d).
-
-    Returns:
-        torch.Tensor: The W_2 distance (not squared) with shape (T, B) or (B,).
-    """
-    # --- Check input shapes and prepare for batch processing ---
-    if mean_true.dim() == 3:  # Shape is (T, B, d)
-        batch_shape = mean_true.shape[:2]  # (T, B)
-        T, B, d = mean_true.shape
-        
-        # Flatten batch dimensions for processing
-        proc_mean_true = mean_true.view(T * B, d)
-        proc_cov_true = cov_true.view(T * B, d, d)
-        proc_mean_sample = mean_sample.view(T * B, d)
-        proc_cov_sample = cov_sample.view(T * B, d, d)
-
-    elif mean_true.dim() == 2:  # Shape is (B, d)
-        batch_shape = mean_true.shape[:1] # (B,)
-        B, d = mean_true.shape
-        
-        # Inputs are already in the correct batch format
-        proc_mean_true = mean_true
-        proc_cov_true = cov_true
-        proc_mean_sample = mean_sample
-        proc_cov_sample = cov_sample
-    else:
-        raise ValueError(
-            f"Unsupported input shape. Expected a mean tensor of shape (T, B, d) or (B, d), "
-            f"but got {mean_true.shape}."
-        )
-        
-    # --- Core W2 distance calculation ---
-
-    # Mean term: ||μ_1 - μ_2||_2^2
-    term_mean = torch.sum((proc_mean_true - proc_mean_sample)**2, dim=1)
-
-    # Covariance term
-    # Compute Σ_1^{1/2} using a numerically stable iterative method
-    sqrt_cov_true = _sqrt_newton_schulz(proc_cov_true)
-    
-    # Compute the product M = (Σ_1^{1/2} Σ_2 Σ_1^{1/2})
-    cov_prod = sqrt_cov_true @ proc_cov_sample @ sqrt_cov_true
-    
-    # Compute the square root of the product: M^{1/2}
-    sqrt_cov_prod = _sqrt_newton_schulz(cov_prod)
-
-    # Compute the trace of the covariance term
-    trace_term = torch.diagonal(proc_cov_true + proc_cov_sample - 2 * sqrt_cov_prod, dim1=-2, dim2=-1).sum(-1)
-    
-    # The trace term should be non-negative, but can be slightly negative due
-    # to numerical errors. Clamp it to zero.
-    w2_squared = term_mean + torch.relu(trace_term)
-    
-    # The final W_2 distance is the square root. Clamp to zero for safety.
-    w2_dist = torch.sqrt(torch.relu(w2_squared))
-
-    # Reshape the result to match the original batch dimensions
-    return w2_dist.view(*batch_shape)
 
 if __name__ == "__main__":
     time_steps = 8
@@ -529,26 +581,33 @@ if __name__ == "__main__":
          print(f"Verification (TNES): sum/N_batch = {tnes_loss_classical_sum.item()/num_valid_batch_elements:.6f}, mean = {tnes_loss_classical_mean.item():.6f}")
          assert torch.isclose(tnes_loss_classical_sum/num_valid_batch_elements, tnes_loss_classical_mean, atol=1e-5)
     
-    # check if ES with norm_p = 2 is the same as L2 loss
-    l2_loss = compute_loss(ens_states, true_states, loss_type='l2', valid_B_mask=sample_valid_B_mask)
-    print(f"L2 Loss (mean): {l2_loss.item():.6f}")
-    es_loss_squared = compute_loss(ens_states, true_states, loss_type='es', norm_p=2, valid_B_mask=sample_valid_B_mask)
-    print(f"Energy Score (mean, exponent=2): {es_loss_squared.item():.6f}")
-    assert torch.isclose(l2_loss, es_loss_squared, atol=1e-5), "L2 loss and ES with norm_p=2 should be the same"
 
-    # check if Nl2 is the same as nes with norm_p = 2.
-    nl2_loss = compute_loss(ens_states, true_states, loss_type='nl2', valid_B_mask=sample_valid_B_mask)
-    print(f"Normalized L2 Loss (mean): {nl2_loss.item():.6f}")
-    nes_loss = compute_loss(ens_states, true_states, loss_type='nes', norm_p=2, valid_B_mask=sample_valid_B_mask)
-    print(f"Normalized Energy Score (mean, exponent=2): {nes_loss.item():.6f}")
-    assert torch.isclose(nl2_loss, nes_loss, atol=1e-5), "Normalized L2 loss and NES with norm_p=2 should be the same"
+    # dummy testing for compute_loss_last
+    print("\n--- Testing compute_loss_last ---")
+    ens_tensor = torch.randn(batch_size, ensemble_size, feature_dim)
+    true_v = torch.randn(batch_size, feature_dim)
+    valid_B_mask = torch.ones(batch_size, dtype=torch.bool)
+    loss_type = 'l2'  # Example loss type
+    #create dummy values for H_info, A, B_mat, a, args
+    H_info = (lambda x: x, torch.eye(feature_dim))  # Dummy H
+    # A and B must be 3d tensors for batch matrix multiplication
+    A = torch.randn(batch_size, feature_dim, feature_dim)
+    B_mat = torch.randn(batch_size, feature_dim, feature_dim)
+    a = torch.randn(feature_dim)
 
-    #check if es with norm_p = 1 is CRPS
-    crps_loss = compute_loss(ens_states, true_states, loss_type='es', norm_p=1, valid_B_mask=sample_valid_B_mask)
-    print(f"CRPS (mean, exponent=1): {crps_loss.item():.6f}")
-    es_loss_classical = compute_loss(ens_states, true_states, loss_type='es', norm_p=1, valid_B_mask=sample_valid_B_mask)
-    print(f"Energy Score (mean, exponent=1): {es_loss_classical.item():.6f}")
-    assert torch.isclose(crps_loss, es_loss_classical, atol=1e-5), "CRPS and ES with norm_p=1 should be the same"
+    args = type('', (), {})()  # Create a dummy args object
+    # add device to args
+    args.device = ens_tensor.device
+
+    loss_last_mean, mean_diff, cov_fro = compute_loss_last(
+        ens_tensor, true_v, loss_type, valid_B_mask=valid_B_mask,
+        norm_p=1, kes_sigma=1.0, return_sum=False,
+        ignore_first=0, lambda1=0.1, lambda2=0.5, H_info=H_info, A=A, B_mat=B_mat, a=a, args=args
+    )
+    print(f"Loss (last mean): {loss_last_mean.item():.6f}")
+    print(f"Mean difference: {mean_diff.item():.6f}")
+    print(f"Covariance Frobenius norm: {cov_fro.item():.6f}")
+
 
 
     print("\nMain tests completed. Review output values.")
