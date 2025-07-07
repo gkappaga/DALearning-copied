@@ -301,44 +301,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # mc_batches += 1
                 # total_mc_batches += 1
             
-            if args.mc_penalty:
-                orig_loss = 0
-                for loss_type in args.loss_type:
-                    orig_loss += compute_loss(
-                        ens_tensor=ens_v_a.unsqueeze(0),
-                        batch_v=batch_v[i + 1].unsqueeze(0),
-                        loss_type=loss_type,
-                        # ignore_first=ignore_first,
-                        end_ind=None,
-                        valid_B_mask=valid_B_mask,
-                        norm_p=args.es_p,
-                        kes_sigma=args.kes_sigma
-                    )
-                mean_penalty = compute_mean_pen(
-                    ens_tensor=ens_v_a,
-                    true_v=batch_v,
-                    valid_B_mask=valid_B_mask,
-                    return_sum=False,
-                    H_info=H_info,
-                    # ignore_first=ignore_first,
-                    A=A_mat,
-                    B_mat=B_mat,
-                    a=a_vec,
-                    args=args,
-                    lambda1=args.lambda1
-                )
-                cov_penalty = compute_cov_pen(
-                    ens_tensor=ens_v_a,
-                    valid_B_mask=valid_B_mask,
-                    return_sum=False,
-                    H_info=H_info,
-                    A=A_mat,
-                    B_mat=B_mat,
-                    a=a_vec,
-                    args=args,
-                    lambda2=args.lambda2
-                )
-                loss = orig_loss + mean_penalty + cov_penalty            
+                       
             if epoch <= args.detach_training_epoch: # if epoch % 5 == 0:
             # if epoch % 5 == 0:
                 ens_v_a = ens_v_a.detach()
@@ -387,25 +350,49 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             if not valid_B_mask.any():
                 num_all_nan_batch += 1
             else:
-                # loss = 0
-                # for loss_type in args.loss_type:
-                #     loss += compute_loss(ens_tensor=ens_tensor, 
-                #                         batch_v=batch_v, 
-                #                         loss_type=loss_type, 
-                #                         ignore_first=ignore_first, 
-                #                         end_ind=None, 
-                #                         valid_B_mask=valid_B_mask,
-                #                         norm_p=args.es_p,
-                #                         kes_sigma=args.kes_sigma)
+                if args.mc_penalty:
+                    orig_loss = 0
+                    for loss_type in args.loss_type:
+                        orig_loss += compute_loss(
+                            ens_tensor=ens_v_a.unsqueeze(0),
+                            batch_v=batch_v[i + 1].unsqueeze(0),
+                            loss_type=loss_type,
+                            # ignore_first=ignore_first,
+                            end_ind=None,
+                            valid_B_mask=valid_B_mask,
+                            norm_p=args.es_p,
+                            kes_sigma=args.kes_sigma
+                        )
+                    mean_penalty = compute_mean_pen(
+                        ens_tensor=ens_v_a,
+                        true_v=batch_v,
+                        valid_B_mask=valid_B_mask,
+                        return_sum=False,
+                        H_info=H_info,
+                        # ignore_first=ignore_first,
+                        A=A_mat,
+                        B_mat=B_mat,
+                        a=a_vec,
+                        args=args,
+                        lambda1=args.lambda1
+                    )
+                    cov_penalty = compute_cov_pen(
+                        ens_tensor=ens_v_a,
+                        valid_B_mask=valid_B_mask,
+                        return_sum=False,
+                        H_info=H_info,
+                        A=A_mat,
+                        B_mat=B_mat,
+                        a=a_vec,
+                        args=args,
+                        lambda2=args.lambda2
+                    )
+                    loss = orig_loss + mean_penalty + cov_penalty 
 
                 success_count += torch.sum(valid_B_mask)
                 # loss = loss / mc_batches
                 losses.update(loss.item(), torch.sum(valid_B_mask))
 
-                # print("LOSS REQUIRES GRAD?", loss.requires_grad)
-                # for name, p in model.named_parameters():
-                #     if p.grad is not None:
-                #         print(name, "grad norm:", p.grad.norm().item())
 
                 nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.zero_grad()
@@ -448,14 +435,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 )
 
     scheduler.step()
-    # if mc_batches>0:
-    #     epoch_orig_penalty = running_orig_loss / mc_batches
-    #     epoch_mean_penalty = running_mean_pen / mc_batches
-    #     epoch_cov_penalty  = running_cov_pen  / mc_batches
-    # else:
-    #     epoch_orig_penalty = 0.0
-    #     epoch_mean_penalty = 0.0
-    #     epoch_cov_penalty  = 0.0
 
     if args.mc_penalty:
         # return losses.avg, epoch_mean_penalty.avg, epoch_cov_penalty.avg, epoch_orig_penalty.avg
