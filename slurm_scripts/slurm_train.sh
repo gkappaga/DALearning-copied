@@ -2,7 +2,7 @@
 
 # Submit this script with: sbatch <this-filename>
 
-#SBATCH --time=02:00:00     # walltime (2 days)
+#SBATCH --time=12:00:00     # walltime (2 days)
 #SBATCH --nodes=1           # number of nodes (1 node)
 #SBATCH --gres=gpu:1        # 4 GPUs of any type
 #SBATCH --partition=gpu     # use GPU partition
