@@ -15,7 +15,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from dapper.mods.KS import Model as DapperKS
 
 @contextmanager
-def redirect_output(save_folder, filename="output.txt"):
+def redirect_output(save_folder, filename="output.txt", enable_redirect=True):
     """
     Context manager to redirect all stdout and stderr output to a specified file.
     
@@ -23,14 +23,45 @@ def redirect_output(save_folder, filename="output.txt"):
         save_folder (str): The folder where the output file should be saved.
         filename (str): The name of the output file (default: "output.txt").
     """
-    os.makedirs(save_folder, exist_ok=True)  # Ensure the directory exists
+    if not enable_redirect:
+        # If redirection is not enabled, just yield and do nothing else.
+        try:
+            yield
+        finally:
+            # No cleanup needed if redirection was not active.
+            pass
+        return # Exit the function early
+
+    # Ensure the directory exists if redirection is enabled
+    os.makedirs(save_folder, exist_ok=True)
     output_file = os.path.join(save_folder, filename)
-    
+
     # Backup original stdout and stderr
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    
+
     file_exists = os.path.exists(output_file)
+
+    try:
+        with open(output_file, "a") as f:  # Open in append mode
+            if file_exists:
+                # Add a timestamp for new entries if the file already exists
+                f.write(f"\n--- New Session: [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ---\n")
+            else:
+                # Optional: Add a header if the file is new
+                f.write(f"--- Log started: [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ---\n")
+
+            sys.stdout = f
+            sys.stderr = f
+            yield  # Execute the code block within the context
+    finally:
+        # Restore stdout and stderr only if they were redirected
+        if enable_redirect:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            # Notify in the console that output was appended
+            # This message will go to the original stdout (e.g., the console)
+            print(f"Output appended to {output_file}")
     
     with open(output_file, "a") as f:  # Open in append mode
         if file_exists:
@@ -826,3 +857,27 @@ def batch_covariance(x, y=None):
         cov_matrix = torch.bmm(x_centered.transpose(1, 2), y_centered) / N
     
     return cov_matrix
+
+def post_process(E, infl):
+    """Inflate, Rotate.
+
+    To avoid recomputing/recombining anomalies,
+    this should have been inside `EnKF_analysis`
+
+    But it is kept as a separate function
+
+    - for readability;
+    - to avoid inflating/rotationg smoothed states (for the `EnKS`).
+    """
+
+    if check_infl(infl):
+        A, mu = center(E)
+        # B, N, _ = E.shape
+        # T = torch.eye(N).unsqueeze(0).expand(B, -1, -1).to(E.device)
+        # T = infl * T
+        # E = mu + torch.bmm(T, A)
+        E = mu + infl * A
+    return E
+
+def mean0(E, axis=1, rescale=True):
+    return center(E, axis=axis, rescale=rescale)[0]
