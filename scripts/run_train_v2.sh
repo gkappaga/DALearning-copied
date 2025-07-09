@@ -10,9 +10,7 @@ python train.py \
     --v 'LearnK' \
     --epochs 1000 \
     --save_epoch 50 \
-    --loss_type 'nl2' \
-    --mc_penalty False
-
+    --loss_type 'nl2'
 # python train.py \
 #     --dataset lorenz96 \
 #     --learning_rate 1e-4 \
