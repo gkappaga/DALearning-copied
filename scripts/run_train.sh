@@ -32,9 +32,7 @@ python train.py \
     --epochs 1000 \
     --save_epoch 50 \
     --loss_type 'nl2' \
-    --mc_penalty True \
-    --lambda1 0 \
-    --lambda2 0.0001
+    --mc_penalty False \
 
 # python train.py \
 #     --dataset lorenz96 \
