@@ -10,7 +10,7 @@ python train.py \
     --v 'LearnK' \
     --epochs 1000 \
     --save_epoch 50 \
-    --loss_type 'nes' \
+    --loss_type 'nl2' \
     --mc_penalty False
 
 # python train.py \
