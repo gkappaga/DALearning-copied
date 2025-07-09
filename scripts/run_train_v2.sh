@@ -7,13 +7,11 @@ python train.py \
     --N 10 \
     --sigma_y 1 \
     --seed 42 \
-    --v 'Affine' \
+    --v 'LearnK' \
     --epochs 1000 \
     --save_epoch 50 \
     --loss_type 'nes' \
-    --mc_penalty True \
-    --lambda1 0 \
-    --lambda2 0.0001
+    --mc_penalty False
 
 # python train.py \
 #     --dataset lorenz96 \
