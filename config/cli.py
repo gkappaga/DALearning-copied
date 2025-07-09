@@ -304,7 +304,7 @@ def get_parameters():
     if args.v == 'LearnK':
         args.input_dim  = args.st_output_dim + args.obs_dim
         args.output_dim = args.ori_dim * args.obs_dim
-    if args.v == 'Affine':
+    elif args.v == 'Affine':
         args.input_dim  = args.st_output_dim + args.obs_dim
         args.output_dim = args.ori_dim**2 + args.ori_dim*args.obs_dim + args.ori_dim
     else:
