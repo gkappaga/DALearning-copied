@@ -307,6 +307,9 @@ def get_parameters():
     elif args.v == 'Affine':
         args.input_dim  = args.st_output_dim + args.obs_dim
         args.output_dim = args.ori_dim**2 + args.ori_dim*args.obs_dim + args.ori_dim
+    elif args.v == 'Affine-ydagger':
+        args.input_dim  = args.st_output_dim + args.obs_dim
+        args.output_dim = args.ori_dim**2 + 2*args.ori_dim*args.obs_dim
     else:
         if args.st_type == 'state_only':
             print("Only apply an ST on the ensemble state data.")
