@@ -678,7 +678,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
             # Concat outputs
             ens_tensor = torch.stack(ens_list)
-            if args.v == "EtE" or args.v == 'LearnK' or args.v == 'Affine':
+            if args.v == "EtE" or args.v == 'LearnK' or args.v == 'Affine' or args.v == 'Affine-ydagger':
                 loc_tensor = None
             else:
                 if args.no_localization:
