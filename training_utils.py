@@ -250,7 +250,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # multiply aydag with the true observation
                 Aydag_y = torch.bmm(A_ydag, obs_y.permute(0, 2, 1))
                 Aydag_y = Aydag_y.permute(0, 2, 1)
-                ens_v_a = Av + Ayhat - Aydag_y
+                ens_v_a = Av + Ayhat + Aydag_y
 
 
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
@@ -670,7 +670,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     # multiply aydag with the true observation
                     Aydag_y = torch.bmm(A_ydag, obs_y.permute(0, 2, 1))
                     Aydag_y = Aydag_y.permute(0, 2, 1)
-                    ens_v_a = Av + Ayhat - Aydag_y
+                    ens_v_a = Av + Ayhat + Aydag_y
                     
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
