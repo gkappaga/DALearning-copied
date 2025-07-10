@@ -863,7 +863,7 @@ def set_models(args):
         st_model2   = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
 
-    if args.v != 'LearnK' and args.v != 'Affine':
+    if args.v != 'LearnK' and args.v != 'Affine' and args.v != 'Affine-ydagger':
         if args.no_localization or args.v == 'EtE':
             local_model = NaiveNetwork(1)
         else:
