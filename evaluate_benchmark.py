@@ -81,11 +81,12 @@ if __name__ == "__main__":
         # test
         print(f"Test {args.v} Results")
         loss_list_nn = []
-        mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, no_nan_percent_nn = \
+        mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
             test_ClassicFilter(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'{folder_name}/test_{args.N}', infl=infl, loc_radius=loc_radius, save_pdf=True)
         print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")
+        print(f"CRPS: {mean_crps_nn:.3f} ± {std_crps_nn:.3f}")
         print(f'No NAN Percentage: {no_nan_percent_nn * 100: .2f}%')
         
             

@@ -688,7 +688,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
             
             # Loss functions
             # absolute rmse
-            crps_tensor = torch.mean(compute_es(ens_states=ens_tensor, true_states=batch_v, norm_p=1), dim=0) / torch.mean(torch.norm(batch_v, p=1, dim=2), dim=0)
+            crps_tensor = torch.mean(compute_es(ens_states=ens_tensor, true_states=batch_v, norm_p=1), dim=0) / torch.mean(torch.norm(batch_v, p=2, dim=2), dim=0)
             rmse_tensor = torch.mean(torch.sqrt(torch.mean((ens_tensor.mean(dim=2) - batch_v) ** 2, dim=2)), dim=0)
             rms_tensor = torch.mean(torch.sqrt(torch.mean((batch_v) ** 2, dim=2)), dim=0)
             rrmse_tensor = rmse_tensor / rms_tensor

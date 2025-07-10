@@ -9,7 +9,7 @@ from utils import AverageMeter, mystery_operator, get_mean_std
 from utils import post_process, mean0
 from visualization import plot_particle_trajectories_with_histograms, plot_particle_trajectories
 from localization import dist2coeff, create_loc_mat
-from loss import compute_loss
+from loss import compute_loss, compute_es
 from networks import NaiveNetwork, SetTransformer, Simple_MLP
 from benchmark_analysis import ensemble_kalman_filter_analysis
 
@@ -623,6 +623,7 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
             
             # Loss functions
             # absolute rmse
+            crps_tensor = torch.mean(compute_es(ens_states=ens_tensor, true_states=batch_v, norm_p=1), dim=0) / torch.mean(torch.norm(batch_v, p=2, dim=2), dim=0)
             rmse_tensor = torch.mean(torch.sqrt(torch.mean((ens_tensor.mean(dim=2) - batch_v) ** 2, dim=2)), dim=0)
             rms_tensor = torch.mean(torch.sqrt(torch.mean((batch_v) ** 2, dim=2)), dim=0)
             rrmse_tensor = rmse_tensor / rms_tensor
@@ -631,12 +632,13 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
             rmv_tensor = torch.mean(torch.sqrt(N / (N-1) * torch.mean((ens_tensor - batch_v.unsqueeze(2)) ** 2, dim=(2,3))),dim=0)
             
             if batch_ind == 0:
-                rmse_tensor_all, rmv_tensor_all, rrmse_tensor_all = rmse_tensor, rmv_tensor, rrmse_tensor
+                rmse_tensor_all, rmv_tensor_all, rrmse_tensor_all, crps_tensor_all = rmse_tensor, rmv_tensor, rrmse_tensor, crps_tensor
             else:
                 # Concatenate tensors along the first dimension
                 rmse_tensor_all = torch.cat((rmse_tensor_all, rmse_tensor))
                 rmv_tensor_all = torch.cat((rmv_tensor_all, rmv_tensor))
                 rrmse_tensor_all = torch.cat((rrmse_tensor_all, rrmse_tensor))
+                crps_tensor_all = torch.cat((crps_tensor_all, crps_tensor))
             
         if plot_figures:
             print(ens_tensor.shape, batch_v.shape)
@@ -673,7 +675,8 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
         mean_rrmse, std_rrmse = get_mean_std(rrmse_tensor_all[valid_B_mask])
         mean_rmse, std_rmse = get_mean_std(rmse_tensor_all[valid_B_mask])
         mean_rmv, std_rmv = get_mean_std(rmv_tensor_all[valid_B_mask])
+        mean_crps, std_crps = get_mean_std(crps_tensor_all[valid_B_mask])
         
         no_nan_percent = torch.sum(valid_B_mask) / args.test_traj_num
 
-    return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, no_nan_percent
+    return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent
