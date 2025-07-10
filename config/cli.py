@@ -200,7 +200,7 @@ def get_parameters():
     parser.add_argument('--redirect_output', action='store_true', help='Redirect the output to a txt file')
 
     # version setting
-    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine'],
+    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine', 'Affine-ydagger'],
                         default='LETKF', help='versions')
 
     args = parser.parse_args()
