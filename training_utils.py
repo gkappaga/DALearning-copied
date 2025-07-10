@@ -245,12 +245,12 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 Av = torch.bmm(A_vhat, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
                 obs_plus_noise = hv + r
-                By = torch.bmm(B_mat, obs_plus_noise.permute(0, 2, 1))
-                By = By.permute(0, 2, 1)
+                Ayhat = torch.bmm(A_yhat, obs_plus_noise.permute(0, 2, 1))
+                Ayhat = Ayhat.permute(0, 2, 1)
                 # multiply aydag with the true observation
                 Aydag_y = torch.bmm(A_ydag, obs_y.permute(0, 2, 1))
                 Aydag_y = Aydag_y.permute(0, 2, 1)
-                ens_v_a = Av + By + Aydag_y + ens_v_f
+                ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
 
 
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
@@ -665,12 +665,12 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     Av = torch.bmm(A_vhat, ens_v_f.permute(0, 2, 1))
                     Av = Av.permute(0, 2, 1)
                     obs_plus_noise = hv + r
-                    By = torch.bmm(B_mat, obs_plus_noise.permute(0, 2, 1))
-                    By = By.permute(0, 2, 1)
+                    Ayhat = torch.bmm(A_yhat, obs_plus_noise.permute(0, 2, 1))
+                    Ayhat = Ayhat.permute(0, 2, 1)
                     # multiply aydag with the true observation
                     Aydag_y = torch.bmm(A_ydag, obs_y.permute(0, 2, 1))
                     Aydag_y = Aydag_y.permute(0, 2, 1)
-                    ens_v_a = Av + By + Aydag_y + ens_v_f
+                    ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
                     
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
