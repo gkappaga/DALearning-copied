@@ -942,7 +942,11 @@ def set_models(args):
         model_list = [model, infl_model, local_model, st_model1, st_model2]
     else:
         model_list = [model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2]
+        print(f'Avhat params: {sum(p.numel() for p in model_Avhat.parameters())}')
+        print(f'Ayhat params: {sum(p.numel() for p in model_Ayhat.parameters())}')
+        print(f'Aydag params: {sum(p.numel() for p in model_Aydag.parameters())}')
     total_params = sum(sum(p.numel() for p in model.parameters()) for model in model_list)
     print(f'Total number of parameters: {total_params}')
+    print(f'Set transformer params: {sum(p.numel() for p in st_model1.parameters())}')
     
     return model_list
