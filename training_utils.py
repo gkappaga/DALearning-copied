@@ -662,7 +662,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         s_v_h,
                         obs_y.squeeze(1)
                     ], dim = -1)
-                    nn_output = model(nn_input).view(-1, args.output_dim)
+                    # nn_output = model(nn_input).view(-1, args.output_dim)
                     avhat_output = model_Avhat(nn_input).view(-1, args.ori_dim**2)
                     ayhat_output = model_Ayhat(nn_input).view(-1, args.ori_dim * args.obs_dim)
                     aydag_output = model_Aydag(nn_input).view(-1, args.ori_dim * args.obs_dim)
