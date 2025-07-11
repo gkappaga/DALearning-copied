@@ -37,8 +37,12 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         H_fun, H = mystery_operator((args.ori_dim, args.obs_dim), args.device)
     else:
         H_fun, H = H_info
-
-    model.train()
+    if args.v != 'Affine-ydagger':
+        model.train()
+    else:
+        model_Avhat.train()
+        model_Ayhat.train()
+        model_Aydag.train()
     
     success_count = 0
     total_count = 0
@@ -363,8 +367,12 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 success_count += torch.sum(valid_B_mask)
                 
                 losses.update(loss.item(), torch.sum(valid_B_mask))
-
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                if args.v == 'Affine-ydagger':
+                    nn.utils.clip_grad_norm_(model_Avhat.parameters(), max_norm=1.0)
+                    nn.utils.clip_grad_norm_(model_Ayhat.parameters(), max_norm=1.0)
+                    nn.utils.clip_grad_norm_(model_Aydag.parameters(), max_norm=1.0)
+                else:
+                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
