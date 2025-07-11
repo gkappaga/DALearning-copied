@@ -14,7 +14,10 @@ from loss import compute_loss, compute_es, compute_mean_pen, compute_cov_pen
 from networks import NaiveNetwork, SetTransformer, Simple_MLP
 
 def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=None):
-    model, infl_model, local_model, st_model1, st_model2 = model_list
+    if args.v == 'Affine-ydagger':
+        model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+    else:
+        model, infl_model, local_model, st_model1, st_model2 = model_list
     
     m = args.N
 
@@ -237,20 +240,19 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     s_v_h,
                     obs_y.squeeze(1)
                 ], dim = -1)
-                nn_output = model(nn_input).view(-1, args.output_dim)
-                A_vhat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                A_yhat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
-                A_ydag = nn_output[:, -args.ori_dim * args.obs_dim:].view(B, args.ori_dim, args.obs_dim)
+                avhat_output = model_Avhat(nn_input).view(-1, args.ori_dim**2)
+                ayhat_output = model_Ayhat(nn_input).view(-1, args.ori_dim * args.obs_dim)
+                aydag_output = model_Aydag(nn_input).view(-1, args.ori_dim * args.obs_dim)
 
-                Av = torch.bmm(A_vhat, ens_v_f.permute(0, 2, 1))
+                Av = torch.bmm(avhat_output, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
                 obs_plus_noise = hv + r
-                Ayhat = torch.bmm(A_yhat, obs_plus_noise.permute(0, 2, 1))
+                Ayhat = torch.bmm(ayhat_output, obs_plus_noise.permute(0, 2, 1))
                 Ayhat = Ayhat.permute(0, 2, 1)
                 # multiply aydag with the true observation
-                Aydag_y = torch.bmm(A_ydag, obs_y.permute(0, 2, 1))
+                Aydag_y = torch.bmm(aydag_output, obs_y.permute(0, 2, 1))
                 Aydag_y = Aydag_y.permute(0, 2, 1)
-                ens_v_a = Av + Ayhat + Aydag_y
+                ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
 
 
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
@@ -465,7 +467,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         return losses.avg
 
 def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig'):
-    model, infl_model, local_model, st_model1, st_model2 = model_list
+    if args.v == 'Affine-ydagger':
+        model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+    else:
+        model, infl_model, local_model, st_model1, st_model2 = model_list
 
     m = args.N
     
@@ -658,19 +663,19 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         obs_y.squeeze(1)
                     ], dim = -1)
                     nn_output = model(nn_input).view(-1, args.output_dim)
-                    A_vhat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
-                    A_yhat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
-                    A_ydag = nn_output[:, -args.ori_dim * args.obs_dim:].view(B, args.ori_dim, args.obs_dim)
+                    avhat_output = model_Avhat(nn_input).view(-1, args.ori_dim**2)
+                    ayhat_output = model_Ayhat(nn_input).view(-1, args.ori_dim * args.obs_dim)
+                    aydag_output = model_Aydag(nn_input).view(-1, args.ori_dim * args.obs_dim)
 
-                    Av = torch.bmm(A_vhat, ens_v_f.permute(0, 2, 1))
+                    Av = torch.bmm(avhat_output, ens_v_f.permute(0, 2, 1))
                     Av = Av.permute(0, 2, 1)
                     obs_plus_noise = hv + r
-                    Ayhat = torch.bmm(A_yhat, obs_plus_noise.permute(0, 2, 1))
+                    Ayhat = torch.bmm(ayhat_output, obs_plus_noise.permute(0, 2, 1))
                     Ayhat = Ayhat.permute(0, 2, 1)
                     # multiply aydag with the true observation
-                    Aydag_y = torch.bmm(A_ydag, obs_y.permute(0, 2, 1))
+                    Aydag_y = torch.bmm(aydag_output, obs_y.permute(0, 2, 1))
                     Aydag_y = Aydag_y.permute(0, 2, 1)
-                    ens_v_a = Av + Ayhat + Aydag_y
+                    ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
                     
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
@@ -851,10 +856,20 @@ def set_models(args):
         st_model2   = SetTransformer(input_dim=args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
     elif args.v == 'Affine-ydagger':
-        model = Simple_MLP(
+        model_Avhat = Simple_MLP(
             d_input  = args.input_dim,
-            d_output = args.output_dim,
-            num_hidden_layers=3
+            d_output = args.ori_dim**2,
+            num_hidden_layers=2
+        ).to(args.device)
+        model_Ayhat = Simple_MLP(
+            d_input  = args.input_dim,
+            d_output = args.ori_dim * args.obs_dim,
+            num_hidden_layers=2
+        ).to(args.device)
+        model_Aydag = Simple_MLP(
+            d_input  = args.input_dim,
+            d_output = args.ori_dim * args.obs_dim,
+            num_hidden_layers=2
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
@@ -894,9 +909,18 @@ def set_models(args):
             else:
                 infl_model = Simple_MLP(d_input=args.ori_dim + 2 * args.st_output_dim, d_output=args.ori_dim, num_hidden_layers=2).to(args.device)
     if args.use_data_parallel:
-        model, infl_model, local_model, st_model1, st_model2 = \
-            nn.DataParallel(model), nn.DataParallel(infl_model), nn.DataParallel(local_model), nn.DataParallel(st_model1), nn.DataParallel(st_model2)
-    model_list = [model, infl_model, local_model, st_model1, st_model2]
+        if args.v != 'Affine-ydagger':
+            model, infl_model, local_model, st_model1, st_model2 = \
+                nn.DataParallel(model), nn.DataParallel(infl_model), nn.DataParallel(local_model), nn.DataParallel(st_model1), nn.DataParallel(st_model2)
+        else:
+            model_Avhat, model_Ayhat, model_Aydag = \
+                nn.DataParallel(model_Avhat), nn.DataParallel(model_Ayhat), nn.DataParallel(model_Aydag)
+        # model, infl_model, local_model, st_model1, st_model2 = \
+        #     nn.DataParallel(model), nn.DataParallel(infl_model), nn.DataParallel(local_model), nn.DataParallel(st_model1), nn.DataParallel(st_model2)
+    if args.v != 'Affine-ydagger':
+        model_list = [model, infl_model, local_model, st_model1, st_model2]
+    else:
+        model_list = [model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2]
     total_params = sum(sum(p.numel() for p in model.parameters()) for model in model_list)
     print(f'Total number of parameters: {total_params}')
     

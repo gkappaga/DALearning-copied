@@ -39,7 +39,10 @@ if __name__ == "__main__":
 
         # set models
         model_list = set_models(args)
-        model, infl_model, local_model, st_model1, st_model2 = model_list
+        if args.v == 'Affine-ydagger':
+            model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+        else:
+            model, infl_model, local_model, st_model1, st_model2 = model_list
 
         # optimizer
         optimizer, scheduler = setup_optimizer_and_scheduler(model_list, args)
