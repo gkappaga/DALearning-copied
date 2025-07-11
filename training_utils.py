@@ -244,9 +244,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     s_v_h,
                     obs_y.squeeze(1)
                 ], dim = -1)
-                avhat_output = model_Avhat(nn_input).view(-1, args.ori_dim**2)
-                ayhat_output = model_Ayhat(nn_input).view(-1, args.ori_dim * args.obs_dim)
-                aydag_output = model_Aydag(nn_input).view(-1, args.ori_dim * args.obs_dim)
+                avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
+                ayhat_output = model_Ayhat(nn_input).view(B, args.ori_dim, args.obs_dim)
+                aydag_output = model_Aydag(nn_input).view(B, args.ori_dim, args.obs_dim)
 
                 Av = torch.bmm(avhat_output, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
