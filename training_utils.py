@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from utils import L63, L96, rk4, etd_rk4_wrapper
 from utils import AverageMeter, mystery_operator, get_mean_std
-from utils import plot_particle_trajectories_with_histograms
+from visualization import plot_particle_trajectories_with_histograms
 from EnKF_utils import loc_EnKF_analysis, EnKF_analysis, post_process, mean0
 from localization import dist2coeff, create_loc_mat
 from loss import compute_loss, compute_es, compute_mean_pen, compute_cov_pen
@@ -719,14 +719,27 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 crps_tensor_all = torch.cat((crps_tensor_all, crps_tensor))
             
         if plot_figures:
+            # plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
+            #                                         true_traj=batch_v[:,0,:], 
+            #                                         dim_indices=[0, 1, 2, 3],
+            #                                         num_time_steps=100, 
+            #                                         mode='color',
+            #                                         save_fig=True,
+            #                                         save_name=fig_name,
+            #                                         hist_step=2)
             plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
                                                     true_traj=batch_v[:,0,:], 
+                                                    # observation=observations[:,-2,:],
+                                                    observation=None,
                                                     dim_indices=[0, 1, 2, 3],
-                                                    num_time_steps=100, 
-                                                    mode='color',
+                                                    start_time=args.test_steps-100,
+                                                    end_time=args.test_steps, 
+                                                    mode='quantile',
                                                     save_fig=True,
+                                                    save_pdf=True,
                                                     save_name=fig_name,
-                                                    hist_step=2)
+                                                    hist_step=1,
+                                                    fontsize=None)
         
         # non-nan trajs
         nan_mask = torch.isnan(rrmse_tensor_all) 
