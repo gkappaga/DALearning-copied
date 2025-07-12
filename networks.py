@@ -53,6 +53,31 @@ class Simple_MLP(nn.Module):
     def forward(self, x):
         return self.model(x)
     
+class Upsampling_MLP(nn.Module):
+    def __init__(self, d_input, d_output, latent_dim=64, num_hidden_layers=2):
+        super(Upsampling_MLP, self).__init__()
+        self.d_input = d_input
+        self.d_output = d_output
+        self.latent_dim = latent_dim
+        self.num_hidden_layers = num_hidden_layers
+
+        layers = []
+        layers.append(nn.Linear(d_input, latent_dim))
+        layers.append(nn.ReLU())
+
+        temp = latent_dim
+        for _ in range(num_hidden_layers):
+            layers.append(nn.Linear(temp, 2*temp))
+            layers.append(nn.ReLU())
+            temp *= 2
+
+        layers.append(nn.Linear(temp, d_output))
+
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+    
 class NaiveNetwork(nn.Module):
     def __init__(self, d):
         super(NaiveNetwork, self).__init__()

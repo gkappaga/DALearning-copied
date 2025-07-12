@@ -11,7 +11,7 @@ from visualization import plot_particle_trajectories_with_histograms
 from EnKF_utils import loc_EnKF_analysis, EnKF_analysis, post_process, mean0
 from localization import dist2coeff, create_loc_mat
 from loss import compute_loss, compute_es, compute_mean_pen, compute_cov_pen
-from networks import NaiveNetwork, SetTransformer, Simple_MLP
+from networks import NaiveNetwork, SetTransformer, Simple_MLP, Upsampling_MLP
 
 def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=None):
     if args.v == 'Affine-ydagger':
@@ -875,19 +875,19 @@ def set_models(args):
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         st_model2   = NaiveNetwork(1)
     elif args.v == 'Affine-ydagger':
-        model_Avhat = Simple_MLP(
+        model_Avhat = Upsampling_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim**2,
             num_hidden_layers=3,
             latent_dim = 64
         ).to(args.device)
-        model_Ayhat = Simple_MLP(
+        model_Ayhat = Upsampling_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
             num_hidden_layers=3,
             latent_dim = 64 
         ).to(args.device)
-        model_Aydag = Simple_MLP(
+        model_Aydag = Upsampling_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
             num_hidden_layers=3,
