@@ -25,7 +25,7 @@ DATASET_INFO = {
         'dt_iter': 5,
         'test_steps': 1500,
         'test_traj_num': 64,
-        'hidden_dim': 128,
+        'hidden_dim': 64,
         'clamp': 20,
         'learning_rate': 1e-3, 
         'batch_size': 512,
