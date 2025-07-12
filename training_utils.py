@@ -878,20 +878,20 @@ def set_models(args):
         model_Avhat = Upsampling_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim**2,
-            num_hidden_layers=3,
-            latent_dim = 64
+            num_hidden_layers=1,
+            latent_dim = 32
         ).to(args.device)
         model_Ayhat = Upsampling_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
-            num_hidden_layers=3,
-            latent_dim = 64 
+            num_hidden_layers=1,
+            latent_dim = 32 
         ).to(args.device)
         model_Aydag = Upsampling_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
-            num_hidden_layers=3,
-            latent_dim = 64
+            num_hidden_layers=1,
+            latent_dim = 32
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
