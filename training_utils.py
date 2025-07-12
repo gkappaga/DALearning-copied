@@ -879,19 +879,19 @@ def set_models(args):
             d_input  = args.input_dim,
             d_output = args.ori_dim**2,
             num_hidden_layers=1,
-            latent_dim = 128
+            latent_dim = 96
         ).to(args.device)
         model_Ayhat = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
             num_hidden_layers=1,
-            latent_dim = 128 
+            latent_dim = 96 
         ).to(args.device)
         model_Aydag = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
             num_hidden_layers=1,
-            latent_dim = 128
+            latent_dim = 96
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
