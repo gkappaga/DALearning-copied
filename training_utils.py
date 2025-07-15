@@ -248,7 +248,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
                 ayhat_output = model_Ayhat(nn_input).view(B, args.ori_dim, args.obs_dim)
                 aydag_output = model_Aydag(nn_input).view(B, args.ori_dim, args.obs_dim)
-                avec_output = model_Avec(nn_input).view(B, args.ori_dim)
+                avec_output = model_Avec(nn_input).view(B, args.ori_dim).unsqueeze(1)
 
                 Av = torch.bmm(avhat_output, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
@@ -677,7 +677,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
                     ayhat_output = model_Ayhat(nn_input).view(B, args.ori_dim, args.obs_dim)
                     aydag_output = model_Aydag(nn_input).view(B, args.ori_dim, args.obs_dim)
-                    avec_output = model_Avec(nn_input).view(B, args.ori_dim)
+                    avec_output = model_Avec(nn_input).view(B, args.ori_dim).unsqueeze(1)
 
                     Av = torch.bmm(avhat_output, ens_v_f.permute(0, 2, 1))
                     Av = Av.permute(0, 2, 1)
