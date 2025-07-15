@@ -3,7 +3,7 @@
 cd ..
 
 python train.py \
-    --dataset lorenz96 \
+    --dataset lorenz63 \
     --N 10 \
     --sigma_y 1 \
     --seed 42 \
