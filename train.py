@@ -40,7 +40,7 @@ if __name__ == "__main__":
         # set models
         model_list = set_models(args)
         if args.v == 'Affine-ydagger':
-            model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+            model_Avhat, model_Ayhat, model_Aydag, model_Avec, infl_model, local_model, st_model1, st_model2 = model_list
         else:
             model, infl_model, local_model, st_model1, st_model2 = model_list
 
