@@ -875,23 +875,23 @@ def set_models(args):
                                         hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         st_model2   = NaiveNetwork(1)
     elif args.v == 'Affine-ydagger':
-        model_Avhat = Upsampling_MLP(
+        model_Avhat = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim**2,
-            num_hidden_layers=2,
-            latent_dim = 24
+            num_hidden_layers=1,
+            latent_dim = 64
         ).to(args.device)
-        model_Ayhat = Upsampling_MLP(
+        model_Ayhat = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
-            num_hidden_layers=2,
-            latent_dim = 24 
+            num_hidden_layers=1,
+            latent_dim = 64 
         ).to(args.device)
-        model_Aydag = Upsampling_MLP(
+        model_Aydag = Simple_MLP(
             d_input  = args.input_dim,
             d_output = args.ori_dim * args.obs_dim,
-            num_hidden_layers=2,
-            latent_dim = 24
+            num_hidden_layers=1,
+            latent_dim = 64
         ).to(args.device)
         infl_model  = NaiveNetwork(1)
         local_model = NaiveNetwork(1)
