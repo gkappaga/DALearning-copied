@@ -717,7 +717,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     K = torch.bmm(K1, torch.inverse(K2))
 
 
-                    diff_yhat = torch.norm(K - ayhat_output, p = 'fro', dim=(1, 2))  # (B,)
+                    diff_yhat = torch.norm(-K - ayhat_output, p = 'fro', dim=(1, 2))  # (B,)
                     diff_ydag = torch.norm(K - aydag_output, p = 'fro', dim=(1, 2))  # (B,)
                     B, d, _ = avhat_output.shape
                     I = torch.eye(d, device=avhat_output.device, dtype=avhat_output.dtype)  # (d,d)
