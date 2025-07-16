@@ -690,42 +690,43 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     Aydag_y = torch.bmm(aydag_output, obs_y.permute(0, 2, 1))
                     Aydag_y = Aydag_y.permute(0, 2, 1)
                     ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
+                    if analysis:
+                        Vnn1 = ens_v_f
+                        Vnn2 = ens_v_f - mean_ens_v_f
+                        Ynn = hv - mean_hv
+                        R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
+                        
+                        # get localization matrices
+                        if args.no_localization:
+                            K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
+                            K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
+                        else:
+                            loc_nn_output = torch.sigmoid(local_model(local_nn_input)) * args.loc_max_val
+                            loc_mat_vy = create_loc_mat(loc_nn_output, args.diff_dist, args.Lvy)
+                            loc_mat_yy = create_loc_mat(loc_nn_output, args.diff_dist, args.Lyy)
+                            
+                            K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) * loc_mat_vy
+                            K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) * loc_mat_yy + R * (N - 1)
+                        
+                        # Kalman Gain
+                        K = torch.bmm(K1, torch.inverse(K2))
+
+
+                        diff_yhat = torch.norm(-K - ayhat_output, p = 'fro', dim=(1, 2))  # (B,)
+                        diff_ydag = torch.norm(K - aydag_output, p = 'fro', dim=(1, 2))  # (B,)
+                        B, d, _ = avhat_output.shape
+                        I = torch.eye(d, device=avhat_output.device, dtype=avhat_output.dtype)  # (d,d)
+                        I = I.unsqueeze(0).expand(B, d, d)                                       # (B,d,d)
+                        diff_avhat = torch.norm(I - avhat_output, p='fro', dim =(1, 2))  # (B,)
+
+                        results.append(torch.stack([diff_yhat, diff_ydag, diff_avhat], dim=1))  # (B, 3)
+                        norms.append(torch.stack([torch.norm(ayhat_output, p='fro', dim=(1, 2)), torch.norm(aydag_output, p='fro', dim=(1, 2)), torch.norm(avhat_output, p='fro', dim=(1, 2))], dim=1))  # (B, 3)
                     
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
                 ens_list.append(ens_v_a)
 
-                if analysis:
-                    Vnn1 = ens_v_f
-                    Vnn2 = ens_v_f - mean_ens_v_f
-                    Ynn = hv - mean_hv
-                    R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
-                    
-                    # get localization matrices
-                    if args.no_localization:
-                        K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
-                        K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
-                    else:
-                        loc_nn_output = torch.sigmoid(local_model(local_nn_input)) * args.loc_max_val
-                        loc_mat_vy = create_loc_mat(loc_nn_output, args.diff_dist, args.Lvy)
-                        loc_mat_yy = create_loc_mat(loc_nn_output, args.diff_dist, args.Lyy)
-                        
-                        K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) * loc_mat_vy
-                        K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) * loc_mat_yy + R * (N - 1)
-                    
-                    # Kalman Gain
-                    K = torch.bmm(K1, torch.inverse(K2))
-
-
-                    diff_yhat = torch.norm(-K - ayhat_output, p = 'fro', dim=(1, 2))  # (B,)
-                    diff_ydag = torch.norm(K - aydag_output, p = 'fro', dim=(1, 2))  # (B,)
-                    B, d, _ = avhat_output.shape
-                    I = torch.eye(d, device=avhat_output.device, dtype=avhat_output.dtype)  # (d,d)
-                    I = I.unsqueeze(0).expand(B, d, d)                                       # (B,d,d)
-                    diff_avhat = torch.norm(I - avhat_output, p='fro', dim =(1, 2))  # (B,)
-
-                    results.append(torch.stack([diff_yhat, diff_ydag, diff_avhat], dim=1))  # (B, 3)
-                    norms.append(torch.stack([torch.norm(ayhat_output, p='fro', dim=(1, 2)), torch.norm(aydag_output, p='fro', dim=(1, 2)), torch.norm(avhat_output, p='fro', dim=(1, 2))], dim=1))  # (B, 3)
+                
 
             # Concat outputs
             ens_tensor = torch.stack(ens_list)
