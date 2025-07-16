@@ -477,7 +477,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     else:
         return losses.avg
 
-def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig'):
+def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', analysis = False):
     if args.v == 'Affine-ydagger':
         model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
     else:
@@ -502,6 +502,8 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
     # loc_mat_vy = dist2coeff(args.Lvy, radius=4).unsqueeze(0)
     # loc_mat_yy = dist2coeff(args.Lyy, radius=4).unsqueeze(0)
 
+    results = []
+    norms = []
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
             batch_v = batch_v.to(device=args.device)
@@ -693,6 +695,38 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                 ens_list.append(ens_v_a)
 
+                if analysis:
+                    Vnn1 = ens_v_f
+                    Vnn2 = ens_v_f - mean_ens_v_f
+                    Ynn = hv - mean_hv
+                    R = args.sigma_y ** 2 * torch.eye(d).unsqueeze(0).expand(B, -1, -1).to(args.device)
+                    
+                    # get localization matrices
+                    if args.no_localization:
+                        K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
+                        K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
+                    else:
+                        loc_nn_output = torch.sigmoid(local_model(local_nn_input)) * args.loc_max_val
+                        loc_mat_vy = create_loc_mat(loc_nn_output, args.diff_dist, args.Lvy)
+                        loc_mat_yy = create_loc_mat(loc_nn_output, args.diff_dist, args.Lyy)
+                        
+                        K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) * loc_mat_vy
+                        K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) * loc_mat_yy + R * (N - 1)
+                    
+                    # Kalman Gain
+                    K = torch.bmm(K1, torch.inverse(K2))
+
+
+                    diff_yhat = torch.norm(K - ayhat_output, p = 'fro', dim=(1, 2))  # (B,)
+                    diff_ydag = torch.norm(K - aydag_output, p = 'fro', dim=(1, 2))  # (B,)
+                    B, d, _ = avhat_output.shape
+                    I = torch.eye(d, device=avhat_output.device, dtype=avhat_output.dtype)  # (d,d)
+                    I = I.unsqueeze(0).expand(B, d, d)                                       # (B,d,d)
+                    diff_avhat = torch.norm(I - avhat_output, p='fro', dim =(1, 2))  # (B,)
+
+                    results.append(torch.stack([diff_yhat, diff_ydag, diff_avhat], dim=1))  # (B, 3)
+                    norms.append(torch.stack([torch.norm(ayhat_output, p='fro', dim=(1, 2)), torch.norm(aydag_output, p='fro', dim=(1, 2)), torch.norm(avhat_output, p='fro', dim=(1, 2))], dim=1))  # (B, 3)
+
             # Concat outputs
             ens_tensor = torch.stack(ens_list)
             if args.v == "EtE" or args.v == 'LearnK' or args.v == 'Affine' or args.v == 'Affine-ydagger':
@@ -722,6 +756,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 rrmse_tensor_all = torch.cat((rrmse_tensor_all, rrmse_tensor))
                 crps_tensor_all = torch.cat((crps_tensor_all, crps_tensor))
             
+        if analysis:
+            result = torch.stack(results, dim=0)
+            norm = torch.stack(norms, dim=0)
         if plot_figures:
             # plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
             #                                         true_traj=batch_v[:,0,:], 
@@ -755,6 +792,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         mean_crps, std_crps = get_mean_std(crps_tensor_all[valid_B_mask])
         
         no_nan_percent = torch.sum(valid_B_mask) / args.test_traj_num
+
+    if analysis:
+        return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm
 
     return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor
 

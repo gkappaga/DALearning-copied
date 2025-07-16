@@ -44,7 +44,10 @@ if __name__ == "__main__":
 
         # set model
         model_list = set_models(args)
-        model, infl_model, local_model, st_model1, st_model2 = model_list
+        if args.v == 'Affine-ydagger':
+            model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+        else:
+            model, infl_model, local_model, st_model1, st_model2 = model_list
 
         # optimizer
         optimizer, scheduler = setup_optimizer_and_scheduler(model_list, args)
@@ -57,7 +60,7 @@ if __name__ == "__main__":
         print("Test NN Results")
         loss_list_nn = []
         mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor = \
-            test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'{folder_name}/test_{args.N}')
+            test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_{args.N}')
         print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")
