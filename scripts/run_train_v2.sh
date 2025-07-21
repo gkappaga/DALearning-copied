@@ -11,6 +11,8 @@ python train.py \
     --epochs 1000 \
     --save_epoch 50 \
     --loss_type 'nl2' \
+    --lr_decay_epochs 200,300,400,500,600,700,800,900 \
+    --lr_decay_rate 0.7 \
 # python train.py \
 #     --dataset lorenz96 \
 #     --learning_rate 1e-4 \
