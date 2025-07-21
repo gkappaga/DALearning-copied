@@ -188,7 +188,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 obs_plus_noise = hv + r
                 # s_v = st_model1(ens_v_f)
                 # s_h = st_model2(obs_plus_noise)
-                s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
+                s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                 nn_input = torch.cat([
                     s_v_h,
                     obs_y.squeeze(1)
@@ -199,7 +199,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             elif args.v == 'Affine':
                 r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                 obs_plus_noise = hv + r
-                s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
+                s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                 nn_input = torch.cat([
                     s_v_h,
                     obs_y.squeeze(1)
@@ -240,7 +240,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             elif args.v == 'Affine-ydagger':
                 r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                 obs_plus_noise = hv + r
-                s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
+                s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                 nn_input = torch.cat([
                     s_v_h,
                     obs_y.squeeze(1)
@@ -505,6 +505,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
     results = []
     norms = []
     differences = []
+    aydag = []
+    ayhat = []
+    kalmans = []
+    avhat = []
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
             batch_v = batch_v.to(device=args.device)
@@ -638,7 +642,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     obs_plus_noise = hv + r
                     # s_v = st_model1(ens_v_f)
                     # s_h = st_model2(obs_plus_noise)
-                    s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
+                    s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                     nn_input = torch.cat([
                         s_v_h,
                         obs_y.squeeze(1)
@@ -649,7 +653,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 elif args.v == 'Affine':
                     r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                     obs_plus_noise = hv + r
-                    s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
+                    s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                     nn_input = torch.cat([
                         s_v_h,
                         obs_y.squeeze(1)
@@ -672,7 +676,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 elif args.v == 'Affine-ydagger':
                     r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
                     obs_plus_noise = hv + r
-                    s_v_h = st_model1(torch.cat([ens_v_f, hv], dim = -1))
+                    s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                     nn_input = torch.cat([
                         s_v_h,
                         obs_y.squeeze(1)
@@ -713,7 +717,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         # Kalman Gain
                         K = torch.bmm(K1, torch.inverse(K2))
 
-
+                        aydag.append(aydag_output)
+                        ayhat.append(ayhat_output)
+                        avhat.append(avhat_output)
+                        kalmans.append(K)
                         diff_yhat = torch.norm(-K - ayhat_output, p = 'fro', dim=(1, 2))  # (B,)
                         diff_ydag = torch.norm(K - aydag_output, p = 'fro', dim=(1, 2))  # (B,)
                         B, d, _ = avhat_output.shape
@@ -770,6 +777,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
             result = torch.stack(results, dim=0)
             norm = torch.stack(norms, dim=0)
             differences = torch.stack(differences, dim=0)
+            aydag = torch.stack(aydag, dim=0)
+            ayhat = torch.stack(ayhat, dim=0)
+            kalmans = torch.stack(kalmans, dim=0)
+            avhat = torch.stack(avhat, dim=0)
         if plot_figures:
             # plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
             #                                         true_traj=batch_v[:,0,:], 
@@ -817,7 +828,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         std_traj_element_wise_std = traj_element_wise_std.std()
         print(mean_traj_element_wise_std, std_traj_element_wise_std)
         an_results = [means_per_traj, stds_per_traj, mean_traj_element_wise_std, std_traj_element_wise_std]
-        return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm, an_results
+        return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm, an_results, aydag, ayhat, kalmans, avhat
 
     return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor
 

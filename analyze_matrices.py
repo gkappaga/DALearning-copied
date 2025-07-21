@@ -5,6 +5,7 @@ import time
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from utils import L63, L96, rk4, etd_rk4_wrapper
 from utils import AverageMeter, mystery_operator, get_mean_std
@@ -20,13 +21,13 @@ from utils import redirect_output
 
 def run_analyses(loader, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig'):
     rmse_list, rrmse_list = [], []
-    mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor, result, norm, an_results = \
+    mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor, result, norm, an_results, aydag, ayhat, kalmans, avhat = \
             test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}', analysis = True)
     rmse_list.append(mean_rmse_nn)
     rrmse_list.append(mean_rrmse_nn)
     print("Average RMSE:", torch.mean(torch.tensor(rmse_list)))
     print("Average R-RMSE:", torch.mean(torch.tensor(rrmse_list)))
-    return result, norm, an_results
+    return result, norm, an_results, aydag, ayhat, kalmans, avhat
 
 if __name__ == "__main__":
     args = get_parameters()
@@ -53,7 +54,7 @@ if __name__ == "__main__":
         ):
             net.eval()
         print("Test Only")
-    result, norm, an_results = run_analyses(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}')
+    result, norm, an_results, aydag, ayhat, kalmans, avhat = run_analyses(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}')
     sep = torch.mean(result, dim = 1)
     sep_n = torch.mean(norm, dim = 1)
     sep_std = torch.std(result, dim = 1)
@@ -130,5 +131,68 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig(f'testing/mean_std_per_traj_{args.N}.png')
     plt.close()
-    print(means_per_traj)
-    print(stds_per_traj)
+    
+    #heatmap the average 40 x 10 aydag, mean over first two dimensions and then heatmap the result
+    aydag_mean = torch.mean(aydag, dim=(0, 1)).cpu().numpy()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(aydag_mean, annot=True, fmt=".2f", cmap='coolwarm', cbar=True)
+    plt.title('Average Aydag Matrix')
+    plt.xlabel('Observation Dimension')
+    plt.ylabel('State Dimension')
+    plt.tight_layout()
+    plt.savefig(f'testing/aydag_mean_{args.N}.png')
+    plt.close()
+
+    #heatmap the average 40 x 10 ayhat, mean over first two dimensions and then heatmap the result
+    ayhat_mean = torch.mean(ayhat, dim=(0, 1)).cpu().numpy()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(ayhat_mean, annot=True, fmt=".2f", cmap='coolwarm', cbar=True)
+    plt.title('Average Ayhat Matrix')
+    plt.xlabel('Observation Dimension')
+    plt.ylabel('State Dimension')
+    plt.tight_layout()
+    plt.savefig(f'testing/ayhat_mean_{args.N}.png')
+    plt.close()
+
+    #plot the average kalman
+    kalmans_mean = torch.mean(kalmans, dim=(0, 1)).cpu().numpy()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(kalmans_mean, annot=True, fmt=".2f", cmap='coolwarm', cbar=True)
+    plt.title('Average Kalman Gain Matrix')
+    plt.xlabel('Observation Dimension')
+    plt.ylabel('State Dimension')
+    plt.tight_layout()
+    plt.savefig(f'testing/kalman_mean_{args.N}.png')
+    plt.close()
+
+    #plot a sample kalman gain
+    sample_kalman = kalmans[0, 0, :, :].cpu().numpy()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(sample_kalman, annot=True, fmt=".2f", cmap='coolwarm', cbar=True)
+    plt.title('Sample Kalman Gain Matrix')
+    plt.xlabel('Observation Dimension')
+    plt.ylabel('State Dimension')
+    plt.tight_layout()
+    plt.savefig(f'testing/sample_kalman_{args.N}.png')
+    plt.close()
+
+    #plot avhat
+    avhat_mean = torch.mean(avhat, dim=(0, 1)).cpu().numpy() + torch.eye(avhat.shape[2]).cpu().numpy()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(avhat_mean, cmap='viridis', cbar=True)
+    plt.title('Average Avhat Matrix')
+    plt.xlabel('Observation Dimension')
+    plt.ylabel('State Dimension')
+    plt.tight_layout()
+    plt.savefig(f'testing/avhat_mean_{args.N}.png')
+    plt.close()
+
+    diff_mean = torch.mean(aydag - ayhat, dim=(0, 1)).cpu().numpy()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(diff_mean, annot=True, fmt=".2f", cmap='coolwarm', cbar=True)
+    plt.title('Difference between Aydag and Ayhat')
+    plt.xlabel('Observation Dimension')
+    plt.ylabel('State Dimension')
+    plt.tight_layout()
+    plt.savefig(f'testing/aydag_ayhat_diff_mean_{args.N}.png')
+    plt.close()

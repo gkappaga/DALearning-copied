@@ -339,6 +339,12 @@ def _enkf_pert_obs_analysis(
 
     innovation_cov = Pyy + R_obs
 
+    ###
+    #remove the innovation_cov just using y_hat. basically replace with y_hat covariance. 
+    # to verify correctness, use large ensemble size (so that cov calc are stable) to verify implementation
+    # is good
+    ###
+
     # --- MODIFICATION START ---
     # Add a small regularization term to innovation_cov to improve stability
     epsilon = 1e-6 # Regularization strength; adjust if necessary
