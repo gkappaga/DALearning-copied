@@ -20,13 +20,13 @@ from utils import redirect_output
 
 def run_analyses(loader, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig'):
     rmse_list, rrmse_list = [], []
-    mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor, result, norm = \
+    mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor, result, norm, an_results = \
             test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}', analysis = True)
     rmse_list.append(mean_rmse_nn)
     rrmse_list.append(mean_rrmse_nn)
     print("Average RMSE:", torch.mean(torch.tensor(rmse_list)))
     print("Average R-RMSE:", torch.mean(torch.tensor(rrmse_list)))
-    return result, norm
+    return result, norm, an_results
 
 if __name__ == "__main__":
     args = get_parameters()
@@ -53,33 +53,41 @@ if __name__ == "__main__":
         ):
             net.eval()
         print("Test Only")
-    result, norm = run_analyses(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}')
+    result, norm, an_results = run_analyses(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}')
     sep = torch.mean(result, dim = 1)
     sep_n = torch.mean(norm, dim = 1)
-    plt.plot(sep[:, 0].cpu().numpy(), label='yhat')
-    plt.plot(sep_n[:, 0].cpu().numpy(), label='yhat_norm')
-    plt.xlabel('Timestep')
-    plt.ylabel('Difference')
-    plt.title('Difference between Ayhat and K')
-    plt.legend()
-    plt.savefig(f'testing/Ayhat_diff_{args.N}.png')
-    plt.close()
-    plt.plot(sep[:, 1].cpu().numpy(), label='ydag')
-    plt.plot(sep_n[:, 1].cpu().numpy(), label='ydag_norm')
-    plt.xlabel('Timestep')
-    plt.ylabel('Difference')
-    plt.title('Difference between Ayhat and K')
-    plt.legend()
-    plt.savefig(f'testing/Aydag_diff_{args.N}.png')
-    plt.close()
-    plt.plot(sep[:, 2].cpu().numpy(), label='Avhat')
-    plt.plot(sep_n[:, 2].cpu().numpy(), label='Avhat_norm')
-    plt.xlabel('Timestep')
-    plt.ylabel('Difference')
-    plt.title('Difference between Avhat and I')
-    plt.legend()
-    plt.savefig(f'testing/Avhat_diff_{args.N}.png')
-    plt.close()
+    sep_std = torch.std(result, dim = 1)
+    sep_n_std = torch.std(norm, dim = 1)
+    labels = ['Ayhat', 'Aydag', 'Avhat']
+
+    for idx, name in enumerate(labels):
+        x      = np.arange(sep.shape[0])
+        m1     = sep[:, idx].cpu().numpy()
+        e1     = sep_std[:, idx].cpu().numpy()
+        m2     = sep_n[:, idx].cpu().numpy()
+        e2     = sep_n_std[:, idx].cpu().numpy()
+
+        plt.figure()
+        # first curve with errorbars
+        plt.plot(x, m1, label=f'{name}',      linewidth=2)
+        plt.plot(x, m2, label=f'{name}_norm', linewidth=2)
+
+        # shade ±1 std
+        plt.fill_between(x, m1-2*e1, m1+2*e1, alpha=0.5)
+        plt.fill_between(x, m2-2*e2, m2+2*e2, alpha=0.5)
+
+        plt.xlabel('Timestep')
+        plt.ylabel('Difference')
+        if name == 'Avhat':
+            plt.title(f'Difference between {name} and I')
+        elif name == 'Ayhat':
+            plt.title(f'Difference between {name} and -K')
+        else:
+            plt.title(f'Difference between {name} and K')
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'testing/{name}_diff_{args.N}.png')
+        plt.close()
     traj = result[:, 0, :].cpu().numpy()
     plt.plot(traj[:, 0], label='yhat')
     plt.plot(traj[:, 1], label='ydag')
@@ -91,4 +99,36 @@ if __name__ == "__main__":
     plt.savefig(f'testing/differences_{args.N}.png')
     plt.close()
 
-                
+    x      = np.arange(sep.shape[0])
+    m1     = sep[:, 3].cpu().numpy()
+    e1     = sep_std[:, 3].cpu().numpy()
+    m2     = sep_n[:, 3].cpu().numpy()
+    e2     = sep_n_std[:, 3].cpu().numpy()
+    plt.figure()
+    # first curve with errorbars
+    plt.plot(x, m1, label='ydag_yhat', linewidth=2)
+    # shade ±1 std
+    plt.fill_between(x, m1-2*e1, m1+2*e1, alpha=0.5)
+    plt.xlabel('Timestep')
+    plt.ylabel('Difference')
+    plt.title('Difference between ydag and yhat')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'testing/ydag_yhat_diff_{args.N}.png')
+    plt.close()
+
+    means_per_traj = an_results[0]
+    stds_per_traj = an_results[1]
+    plt.figure()
+    # make the std the errorbar
+    plt.scatter(range(1, len(means_per_traj) + 1), means_per_traj, label='Mean per Trajectory', color='blue')
+    plt.errorbar(range(1, len(means_per_traj) + 1), means_per_traj, yerr=stds_per_traj, fmt='o', color='blue', capsize=5)
+    plt.xlabel('Trajectory Index')
+    plt.ylabel('Mean Value')
+    plt.title('Mean and Std per Trajectory')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'testing/mean_std_per_traj_{args.N}.png')
+    plt.close()
+    print(means_per_traj)
+    print(stds_per_traj)

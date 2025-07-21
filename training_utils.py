@@ -504,9 +504,11 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
     results = []
     norms = []
+    differences = []
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
             batch_v = batch_v.to(device=args.device)
+            print(batch_v.shape)
 
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
@@ -718,10 +720,17 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         I = torch.eye(d, device=avhat_output.device, dtype=avhat_output.dtype)  # (d,d)
                         I = I.unsqueeze(0).expand(B, d, d)                                       # (B,d,d)
                         diff_avhat = torch.norm(I - avhat_output, p='fro', dim =(1, 2))  # (B,)
+                        normalized_aydag = aydag_output / torch.norm(aydag_output, p='fro', dim=(1, 2), keepdim=True)  # (B, d, obs_dim)
+                        normalized_ayhat = ayhat_output / torch.norm(ayhat_output, p='fro', dim=(1, 2), keepdim=True)  # (B, d,
+                        diff_ydag_yhat = torch.norm(aydag_output - ayhat_output, p='fro', dim=(1, 2))  # (B,)
+                        differences.append(aydag_output - ayhat_output)  # (B, d, obs_dim)
 
-                        results.append(torch.stack([diff_yhat, diff_ydag, diff_avhat], dim=1))  # (B, 3)
-                        norms.append(torch.stack([torch.norm(ayhat_output, p='fro', dim=(1, 2)), torch.norm(aydag_output, p='fro', dim=(1, 2)), torch.norm(avhat_output, p='fro', dim=(1, 2))], dim=1))  # (B, 3)
-                    
+                        #calculate difference between aydag_output and ayhat_output is small or close to some constant
+
+
+                        results.append(torch.stack([diff_yhat, diff_ydag, diff_avhat, diff_ydag_yhat], dim=1))  # (B, 4)
+                        norms.append(torch.stack([torch.norm(ayhat_output, p='fro', dim=(1, 2)), torch.norm(aydag_output, p='fro', dim=(1, 2)), torch.norm(avhat_output, p='fro', dim=(1, 2)), torch.norm(aydag_output, p='fro', dim=(1, 2))], dim=1))  # (B, 4)
+
                 ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
 
                 ens_list.append(ens_v_a)
@@ -760,6 +769,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         if analysis:
             result = torch.stack(results, dim=0)
             norm = torch.stack(norms, dim=0)
+            differences = torch.stack(differences, dim=0)
         if plot_figures:
             # plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
             #                                         true_traj=batch_v[:,0,:], 
@@ -795,7 +805,19 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         no_nan_percent = torch.sum(valid_B_mask) / args.test_traj_num
 
     if analysis:
-        return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm
+        traj_element_wise_std = torch.zeros((64, 40, 10))
+        means_per_traj = torch.zeros(B)
+        stds_per_traj = torch.zeros(B)
+        for i in range(64):
+            traj_element_wise_std[i, :, :] = torch.std(differences[:, i, :, :], dim=0)
+            means_per_traj[i] = torch.mean(traj_element_wise_std[i, :, :])
+            stds_per_traj[i] = torch.std(traj_element_wise_std[i, :, :])
+        #now get the mean of every single element in the traj_element_wise_std
+        mean_traj_element_wise_std = traj_element_wise_std.mean()
+        std_traj_element_wise_std = traj_element_wise_std.std()
+        print(mean_traj_element_wise_std, std_traj_element_wise_std)
+        an_results = [means_per_traj, stds_per_traj, mean_traj_element_wise_std, std_traj_element_wise_std]
+        return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm, an_results
 
     return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor
 
