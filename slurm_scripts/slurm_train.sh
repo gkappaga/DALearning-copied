@@ -22,4 +22,4 @@
 
 # Change to the directory containing v2_run_fine_tuning.sh
 cd $HOME/gkappaga-DALearning-2/DALearning-copied/scripts
-bash run_train_v2.sh
+bash run_train.sh
