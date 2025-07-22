@@ -15,7 +15,7 @@ cd ..
 python train.py \
     --dataset lorenz96 \
     --N 10 \
-    --sigma_y 1 \
+    --sigma_y 0.7 \
     --seed 42 \
     --v 'Affine-ydagger' \
     --epochs 1000 \
