@@ -23,22 +23,22 @@ cd ..
 #     --epochs 500 \
 #     --save_epoch 50
 
-python train.py \
-    --dataset lorenz96 \
-    --N 10 \
-    --sigma_y 1 \
-    --seed 42 \
-    --v 'LearnK' \
-    --epochs 1000 \
-    --save_epoch 50 \
-    --loss_type 'nl2' \
+# python train.py \
+#     --dataset lorenz96 \
+#     --N 10 \
+#     --sigma_y 1 \
+#     --seed 42 \
+#     --v 'LearnK' \
+#     --epochs 1000 \
+#     --save_epoch 50 \
+#     --loss_type 'nl2' \
 
 python train.py \
-    --dataset lorenz63 \
-    --N 10 \
+    --dataset lorenz96 \
+    --N 20 \
     --sigma_y 1 \
     --seed 42 \
-    --v 'LearnK' \
+    --v 'Affine-ydagger' \
     --epochs 1000 \
     --save_epoch 50 \
     --loss_type 'nl2' \
