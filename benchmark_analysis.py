@@ -2,6 +2,7 @@ import torch
 import math
 import time # For timing analysis steps
 from localization import pairwise_distances, dist2coeff
+from EnKF_utils import mean0
 # import matplotlib.pyplot as plt # Uncomment for plotting GC test or RMSEs
 
 # ##############################################################################
@@ -323,9 +324,15 @@ def _enkf_pert_obs_analysis(
 
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
     
-    Pxy = (Af.transpose(-2, -1) @ AYf) * scaling_factor
+    r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
+    noisy_observations = ensemble_y_f + r
+    centered_n_o, _ = center_ensemble(noisy_observations, rescale=False)
+    scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
+    # innovation_cov = (centered_n_o.transpose(-2, -1) @ centered_n_o) * scaling_factor
+    
+    # Pxy = (Af.transpose(-2, -1) @ AYf) * scaling_factor
+    Pxy = (Af.transpose(-2, -1) @ centered_n_o) * scaling_factor
     Pyy = (AYf.transpose(-2, -1) @ AYf) * scaling_factor
-
     if localization_matrix_Lxy is not None:
         Pxy = Pxy * localization_matrix_Lxy
     if localization_matrix_Lyy is not None:
@@ -338,7 +345,12 @@ def _enkf_pert_obs_analysis(
         R_obs = (sigma_y**2) * torch.eye(d_obs, device=device, dtype=dtype)
 
     innovation_cov = Pyy + R_obs
-
+    # #innovation_cov should be covariance of the observations
+    # r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
+    # noisy_observations = ensemble_y_f + r
+    # centered_n_o, _ = center_ensemble(noisy_observations, rescale=False)
+    scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
+    innovation_cov = (centered_n_o.transpose(-2, -1) @ centered_n_o) * scaling_factor
     ###
     #remove the innovation_cov just using y_hat. basically replace with y_hat covariance. 
     # to verify correctness, use large ensemble size (so that cov calc are stable) to verify implementation

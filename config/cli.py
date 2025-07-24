@@ -201,7 +201,7 @@ def get_parameters():
 
     # version setting
     parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine', 'Affine-ydagger'],
-                        default='LETKF', help='versions')
+                        default='EnKF', help='versions')
 
     args = parser.parse_args()
 

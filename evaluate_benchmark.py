@@ -35,6 +35,9 @@ def get_benchmarks(args):
     
     # Convert to numpy arrays
     sigma_y_1_array = sigma_y_1.to_numpy()
+    print(sigma_y_1_array)
+    if(np.isnan(sigma_y_1_array[0][0])):
+        sigma_y_1_array[0][0] = 4
     sigma_y_0_7_array = sigma_y_0_7.to_numpy()
 
     return sigma_y_1_array, sigma_y_0_7_array
@@ -64,18 +67,20 @@ if __name__ == "__main__":
         print(f"Test on {args.test_traj_num} trajectories with the length {args.test_steps} and ensemble size {args.N}. Observation noise sigma_y={args.sigma_y}.")
     
         # get optimal parameters
-        sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(args)
-        if args.sigma_y == 1:
-            dapper_array = sigma_y_1_array
-        elif args.sigma_y == 0.7:
-            dapper_array = sigma_y_0_7_array
-        else:
-            raise NotImplementedError
-        print(dapper_array.shape)
-        loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
-        print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
-        print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
-        print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
+        if args.N != 1000:
+            sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(args)
+            if args.sigma_y == 1:
+                dapper_array = sigma_y_1_array
+            elif args.sigma_y == 0.7:
+                dapper_array = sigma_y_0_7_array
+            else:
+                raise NotImplementedError
+        if args.N != 1000:
+            print(dapper_array.shape)
+            loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
+            print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
+            print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
+            print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
         
         
         # test

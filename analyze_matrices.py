@@ -22,7 +22,7 @@ from utils import redirect_output
 def run_analyses(loader, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig'):
     rmse_list, rrmse_list = [], []
     mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn, loc_tensor, result, norm, an_results, aydag, ayhat, kalmans, avhat = \
-            test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}', analysis = True)
+            test_model(test_loader, model_list, args, H_info=H_info, plot_figures=True, fig_name=f'testing/{folder_name}/test_only_{args.N}', analysis = True)
     rmse_list.append(mean_rmse_nn)
     rrmse_list.append(mean_rrmse_nn)
     print("Average RMSE:", torch.mean(torch.tensor(rmse_list)))
@@ -45,7 +45,12 @@ if __name__ == "__main__":
 
     # optimizer
     optimizer, scheduler = setup_optimizer_and_scheduler(model_list, args)
+    folder_name = args.cp_load_path.split('/')[1]
+    print(folder_name)
     print(args.cp_load_path)
+    import os
+    output_dir = os.path.join("testing", folder_name)
+    os.makedirs(output_dir, exist_ok=True)
     if args.cp_load_path != "no":
         load_checkpoint(model_list, None, None, filename=args.cp_load_path, use_data_parallel=args.use_data_parallel)
         for name, net in zip(
@@ -54,7 +59,7 @@ if __name__ == "__main__":
         ):
             net.eval()
         print("Test Only")
-    result, norm, an_results, aydag, ayhat, kalmans, avhat = run_analyses(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'testing/test_only_{args.N}')
+    result, norm, an_results, aydag, ayhat, kalmans, avhat = run_analyses(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'testing/{folder_name}/test_only_{args.N}')
     sep = torch.mean(result, dim = 1)
     sep_n = torch.mean(norm, dim = 1)
     sep_std = torch.std(result, dim = 1)
@@ -87,7 +92,7 @@ if __name__ == "__main__":
             plt.title(f'Difference between {name} and K')
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'testing/{name}_diff_{args.N}.png')
+        plt.savefig(f'testing/{folder_name}/{name}_diff_{args.N}.png')
         plt.close()
     traj = result[:, 0, :].cpu().numpy()
     plt.plot(traj[:, 0], label='yhat')
@@ -97,7 +102,7 @@ if __name__ == "__main__":
     plt.ylabel('Difference')
     plt.title('Differences over time')
     plt.legend()
-    plt.savefig(f'testing/differences_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/differences_{args.N}.png')
     plt.close()
 
     x      = np.arange(sep.shape[0])
@@ -107,15 +112,15 @@ if __name__ == "__main__":
     e2     = sep_n_std[:, 3].cpu().numpy()
     plt.figure()
     # first curve with errorbars
-    plt.plot(x, m1, label='ydag_yhat', linewidth=2)
+    plt.plot(x, m1, label='mean of F-norm', linewidth=2)
     # shade ±1 std
     plt.fill_between(x, m1-2*e1, m1+2*e1, alpha=0.5)
     plt.xlabel('Timestep')
     plt.ylabel('Difference')
-    plt.title('Difference between ydag and yhat')
+    plt.title('Difference between Aydag and Ayhat')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f'testing/ydag_yhat_diff_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/aydag_ayhat_diff_{args.N}.png')
     plt.close()
 
     means_per_traj = an_results[0]
@@ -129,7 +134,7 @@ if __name__ == "__main__":
     plt.title('Mean and Std per Trajectory')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f'testing/mean_std_per_traj_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/mean_std_per_traj_{args.N}.png')
     plt.close()
     
     #heatmap the average 40 x 10 aydag, mean over first two dimensions and then heatmap the result
@@ -140,7 +145,7 @@ if __name__ == "__main__":
     plt.xlabel('Observation Dimension')
     plt.ylabel('State Dimension')
     plt.tight_layout()
-    plt.savefig(f'testing/aydag_mean_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/aydag_mean_{args.N}.png')
     plt.close()
 
     #heatmap the average 40 x 10 ayhat, mean over first two dimensions and then heatmap the result
@@ -151,7 +156,7 @@ if __name__ == "__main__":
     plt.xlabel('Observation Dimension')
     plt.ylabel('State Dimension')
     plt.tight_layout()
-    plt.savefig(f'testing/ayhat_mean_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/ayhat_mean_{args.N}.png')
     plt.close()
 
     #plot the average kalman
@@ -162,7 +167,7 @@ if __name__ == "__main__":
     plt.xlabel('Observation Dimension')
     plt.ylabel('State Dimension')
     plt.tight_layout()
-    plt.savefig(f'testing/kalman_mean_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/kalman_mean_{args.N}.png')
     plt.close()
 
     #plot a sample kalman gain
@@ -173,7 +178,7 @@ if __name__ == "__main__":
     plt.xlabel('Observation Dimension')
     plt.ylabel('State Dimension')
     plt.tight_layout()
-    plt.savefig(f'testing/sample_kalman_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/sample_kalman_{args.N}.png')
     plt.close()
 
     #plot avhat
@@ -184,7 +189,7 @@ if __name__ == "__main__":
     plt.xlabel('Observation Dimension')
     plt.ylabel('State Dimension')
     plt.tight_layout()
-    plt.savefig(f'testing/avhat_mean_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/avhat_mean_{args.N}.png')
     plt.close()
 
     diff_mean = torch.mean(aydag - ayhat, dim=(0, 1)).cpu().numpy()
@@ -194,5 +199,5 @@ if __name__ == "__main__":
     plt.xlabel('Observation Dimension')
     plt.ylabel('State Dimension')
     plt.tight_layout()
-    plt.savefig(f'testing/aydag_ayhat_diff_mean_{args.N}.png')
+    plt.savefig(f'testing/{folder_name}/aydag_ayhat_diff_mean_{args.N}.png')
     plt.close()
