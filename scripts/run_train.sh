@@ -35,7 +35,7 @@ cd ..
 
 python train.py \
     --dataset lorenz96 \
-    --N 20 \
+    --N 10 \
     --sigma_y 1 \
     --seed 42 \
     --v 'Affine-ydagger' \

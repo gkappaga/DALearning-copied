@@ -59,6 +59,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     for batch_ind, batch_v in enumerate(loader):
         t_start = time.time()
         batch_v = batch_v.to(device=args.device)
+        B = batch_v.shape[1]  # number of trajectories
+        sigma_y_batch = (
+            torch.rand(B, device=args.device) * (0.9) + 0.1
+        )
 
         # Sample from prior
         ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
@@ -83,7 +87,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         for i in range(end_ind):
             # get next observation
             obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
-            obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+            # obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+            sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+            obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
 
             # forecast step
             ens_v_a = ens_v_a.reshape(-1, args.ori_dim)
@@ -103,8 +109,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             d = hv.shape[2]
             
             # generate a random variable for the observation noise
-            r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
-            
+            # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+            sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+            r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
+
             ens_i = obs_y - hv - r
             
             # for the ensemble dataset and observations
@@ -238,7 +246,9 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
                 ens_v_a = Av + By + a_exp + ens_v_f
             elif args.v == 'Affine-ydagger':
-                r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
                 obs_plus_noise = hv + r
                 s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                 nn_input = torch.cat([
@@ -512,8 +522,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
             batch_v = batch_v.to(device=args.device)
-            print(batch_v.shape)
-
+            B = batch_v.shape[1]  # number of trajectories
+            sigma_y_batch = (
+                torch.rand(B, device=args.device) * (0.9) + 0.1
+            )
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
             ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -527,8 +539,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 t_start = time.time()
                 # get next observation
                 obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
-                obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
-
+                # obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+                obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
                 # forecast step
                 ens_v_a = ens_v_a.reshape(-1, args.ori_dim)
                 for j in range(args.dt_iter):
@@ -550,8 +563,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 d = hv.shape[2]
                 
                 # generate a random variable for the observation noise
-                r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
-                
+                # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
                 ens_i = obs_y - hv - r
                 
                 # for the ensemble dataset and observations
@@ -674,7 +688,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                     ens_v_a = Av + By + a_exp + ens_v_f
                 elif args.v == 'Affine-ydagger':
-                    r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                    # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                    sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                    r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
                     obs_plus_noise = hv + r
                     s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                     nn_input = torch.cat([
