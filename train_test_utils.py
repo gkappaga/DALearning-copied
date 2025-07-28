@@ -529,6 +529,10 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
             batch_v = batch_v.to(device=args.device)
+            B = batch_v.shape[1]
+            sigma_y_batch = (
+                torch.rand(B, device=args.device) * (0.9) + 0.1
+            )
 
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
@@ -538,7 +542,9 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
             ens_list = [ens_v_a]
             
             obs_y = H_fun(batch_v[0].unsqueeze(1))
-            obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+            # obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+            sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+            obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
             obs_y_list = [obs_y]
 
             # Iterate over timesteps in batch
@@ -546,7 +552,8 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
                 t_start = time.time()
                 # get next observation
                 obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
-                obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+                # obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
                 obs_y_list.append(obs_y)
 
                 # forecast step
@@ -573,10 +580,10 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
                 common_enkf_args = {
                         "observation_y": obs_y.squeeze(1),
                         "observation_operator_ens": H_fun,
-                        "sigma_y": args.sigma_y,
+                        # "sigma_y": args.sigma_y,
+                        "sigma_y" : sigma_y_batch,
                         "inflation_factor": infl
                     }
-                
                 if args.v == 'EnKF':
                     loc_mat_vy = dist2coeff(args.Lvy, radius=loc_radius).unsqueeze(0)
                     loc_mat_yy = dist2coeff(args.Lyy, radius=loc_radius).unsqueeze(0)

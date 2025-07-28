@@ -304,7 +304,6 @@ def _enkf_pert_obs_analysis(
 ):
     """ EnKF with Perturbed Observations - Analysis Step (Batched) """
     batch_size, N_ensemble, d_state = ensemble_f.shape
-    
     if observation_y.ndim == 1:
         obs_y_eff = observation_y.unsqueeze(0) 
         d_obs = observation_y.shape[0]
@@ -324,7 +323,9 @@ def _enkf_pert_obs_analysis(
 
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
     
-    r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
+    # r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
+    sigma_y_exp = sigma_y.view(batch_size, 1, 1).expand_as(ensemble_y_f)
+    r = mean0(sigma_y_exp * torch.randn_like(ensemble_y_f))
     noisy_observations = ensemble_y_f + r
     centered_n_o, _ = center_ensemble(noisy_observations, rescale=False)
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
@@ -494,7 +495,6 @@ def _letkf_core_etkf_update(
 
     # local_A_a: (B, N_ensemble, N_x_local)
     local_A_a = T_transform @ local_A_f
-
     return local_mean_a, local_A_a
 
 
@@ -532,8 +532,22 @@ def _letkf_analysis(
     innovation_mean_global = obs_y_eff.unsqueeze(1) - mean_yf_global
     
     # Transform observations and innovations by R^-1/2 (here R = sigma_y^2 * I)
-    AYf_global_transformed = AYf_global / sigma_y         # (B, N_ensemble, d_obs)
-    innovation_mean_global_transformed = innovation_mean_global / sigma_y # (B, 1, d_obs)
+    B, N, d_obs = ensemble_y_f.shape
+
+    if sigma_y.ndim == 0:
+        sigma_y_exp = sigma_y.view(1, 1, 1).expand(B, N, d_obs)
+    elif sigma_y.ndim == 1:
+        sigma_y_exp = sigma_y.view(B, 1, 1).expand(B, N, d_obs)
+    else:
+        raise ValueError("Unsupported shape for sigma_y")
+    AYf_global_transformed = AYf_global / sigma_y_exp         # (B, N_ensemble, d_obs)
+    if sigma_y.ndim == 0:
+        sigma_y_exp = sigma_y.view(1, 1, 1).expand(B, 1, d_obs)
+    elif sigma_y.ndim == 1:
+        sigma_y_exp = sigma_y.view(B, 1, 1).expand(B, 1, d_obs)
+    else:
+        raise ValueError("Unsupported shape for sigma_y")
+    innovation_mean_global_transformed = innovation_mean_global / sigma_y_exp # (B, 1, d_obs)
 
     # Initialize analysis ensemble parts
     ensemble_a_mean_parts = torch.zeros_like(mean_f_global) # (B, 1, d_state)
@@ -577,7 +591,6 @@ def _letkf_analysis(
         rho_local_k_weights = rho_k[local_obs_indices] # (N_y_local_k,)
         # sqrt_rho_local_k broadcastable: (1, 1, N_y_local_k)
         sqrt_rho_local_k_bcast = torch.sqrt(rho_local_k_weights).view(1, 1, -1)
-
         # eff_AYf_k_anom: (B, N_ensemble, N_y_local_k)
         eff_AYf_k_anom = AYf_local_k * sqrt_rho_local_k_bcast
         # eff_innov_k: (B, 1, N_y_local_k) -> squeezed to (B, N_y_local_k)
@@ -590,8 +603,7 @@ def _letkf_analysis(
             eff_AYf_k_anom, eff_innov_k, N_ensemble
         )
         # updated_mean_k: (B,1), updated_A_k: (B, N_ensemble, 1)
-
-        ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k
+        ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k # (B, 1, d_state)
         ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_k.squeeze(-1)
 
     ensemble_a = ensemble_a_mean_parts + ensemble_a_anom_parts
@@ -625,7 +637,7 @@ def ensemble_kalman_filter_analysis(
             ensemble_f, observation_y, observation_operator_ens, sigma_y,
             localization_matrix_Lxy, localization_matrix_Lyy
         )
-    elif method == "ERSF": # ETKF variant
+    elif method == "ESRF": # ETKF variant
         ensemble_a_raw, kalman_gain_or_transform = _ersf_analysis(
             ensemble_f, observation_y, observation_operator_ens, sigma_y
         )

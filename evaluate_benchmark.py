@@ -44,9 +44,8 @@ def get_benchmarks(args):
 
 if __name__ == "__main__":
     args = get_parameters()
-    print(args)
     
-    folder_name = os.path.join("save",f"benchmark_{args.dataset}_{args.sigma_y}_{args.v}")
+    folder_name = os.path.join("save",f"benchmark_{args.dataset}_varyingnoise_{args.v}")
     if not os.path.isdir(folder_name):
         os.makedirs(folder_name)
     
@@ -69,12 +68,13 @@ if __name__ == "__main__":
         # get optimal parameters
         if args.N != 1000:
             sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(args)
-            if args.sigma_y == 1:
-                dapper_array = sigma_y_1_array
-            elif args.sigma_y == 0.7:
-                dapper_array = sigma_y_0_7_array
-            else:
-                raise NotImplementedError
+            dapper_array = sigma_y_1_array
+            # if args.sigma_y == 1:
+            #     dapper_array = sigma_y_1_array
+            # elif args.sigma_y == 0.7:
+            #     dapper_array = sigma_y_0_7_array
+            # else:
+            #     raise NotImplementedError
         if args.N != 1000:
             print(dapper_array.shape)
             loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
@@ -112,7 +112,7 @@ if __name__ == "__main__":
         }
         
         # print(torch.mean((ens_tensor_enkf.mean(dim=2) - ens_tensor_nn.mean(dim=2))**2, dim=(1,2))[:100])
-        
+        print(tensor_dict['nn'])
         if args.cp_load_path != "no":
             if args.zero_infl:
                 torch.save(tensor_dict, os.path.join(folder_name, f"output_records_zero_infl_{args.N}.pt"))
