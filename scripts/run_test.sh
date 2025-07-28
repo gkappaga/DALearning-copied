@@ -3,14 +3,14 @@
 cd ..
 
 # lorenz 63
-dataset="lorenz63"
+dataset="lorenz96"
 
 sigma_y=1
 seed=42
-save_dir="2025-07-21_11-57lorenz63_1.0_10_60_8192_nl2_joint_Affine-ydagger"
+save_dir="2025-07-24_14-27lorenz96_1.0_10_60_8192_nl2_joint_Affine-ydagger"
 
 # sigma_y = $sigma_y, EnST
-for N in 10 20 40; do
+for N in 5 10 15 20 40 60 100; do
     python evaluate.py \
         --dataset $dataset \
         --N $N \

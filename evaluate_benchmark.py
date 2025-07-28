@@ -44,13 +44,19 @@ def get_benchmarks(args):
 
 if __name__ == "__main__":
     args = get_parameters()
+    suffix = ""
     
-    folder_name = os.path.join("save",f"benchmark_{args.dataset}_varyingnoise_{args.v}")
+    if args.v == "EnKF" and hasattr(args, "access_to_noise"):
+        suffix = f"_access_{args.access_to_noise}"
+
+    folder_name = os.path.join('save/benchmark_models/', f"benchmark_{args.dataset}_varyingnoise_{args.v}{suffix}_{args.N}")
+    # folder_name = os.path.join('save/benchmark_models/', f"benchmark_{args.dataset}_varyingnoise_{args.v}_{args.N}")
     if not os.path.isdir(folder_name):
         os.makedirs(folder_name)
     
     # redirect output
     with redirect_output(folder_name, filename="test_output.txt", enable_redirect=args.redirect_output):
+        print(f'{args.access_to_noise}')
         if args.seed is not None and args.seed != "None":
             torch.manual_seed(int(args.seed))
 
@@ -87,7 +93,7 @@ if __name__ == "__main__":
         print(f"Test {args.v} Results")
         loss_list_nn = []
         mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
-            test_ClassicFilter(test_loader, args, H_info=H_info, plot_figures=True, fig_name=f'{folder_name}/test_{args.N}', infl=infl, loc_radius=loc_radius, save_pdf=True)
+            test_ClassicFilter(test_loader, args, args.access_to_noise, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', infl=infl, loc_radius=loc_radius, save_pdf=True)
         print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")
@@ -112,7 +118,10 @@ if __name__ == "__main__":
         }
         
         # print(torch.mean((ens_tensor_enkf.mean(dim=2) - ens_tensor_nn.mean(dim=2))**2, dim=(1,2))[:100])
-        print(tensor_dict['nn'])
+        
+        record_name = f"output_records_{args.N}.pt"
+        record_path = os.path.join(folder_name, record_name)
+        torch.save(tensor_dict, record_path)
         if args.cp_load_path != "no":
             if args.zero_infl:
                 torch.save(tensor_dict, os.path.join(folder_name, f"output_records_zero_infl_{args.N}.pt"))

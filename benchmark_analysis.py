@@ -299,8 +299,9 @@ def _enkf_pert_obs_analysis(
     observation_y,          # (B, d_obs) or (d_obs,)
     observation_operator_ens, # (B, N_ensemble, d_state) -> (B, N_ensemble, d_obs)
     sigma_y,                # scalar or (B,)
+    access_to_noise,
     localization_matrix_Lxy=None, # (d_state, d_obs), broadcasts
-    localization_matrix_Lyy=None  # (d_obs, d_obs), broadcasts
+    localization_matrix_Lyy=None,  # (d_obs, d_obs), broadcasts
 ):
     """ EnKF with Perturbed Observations - Analysis Step (Batched) """
     batch_size, N_ensemble, d_state = ensemble_f.shape
@@ -330,9 +331,10 @@ def _enkf_pert_obs_analysis(
     centered_n_o, _ = center_ensemble(noisy_observations, rescale=False)
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
     # innovation_cov = (centered_n_o.transpose(-2, -1) @ centered_n_o) * scaling_factor
-    
-    # Pxy = (Af.transpose(-2, -1) @ AYf) * scaling_factor
-    Pxy = (Af.transpose(-2, -1) @ centered_n_o) * scaling_factor
+    if access_to_noise:
+        Pxy = (Af.transpose(-2, -1) @ AYf) * scaling_factor
+    else:
+        Pxy = (Af.transpose(-2, -1) @ centered_n_o) * scaling_factor
     Pyy = (AYf.transpose(-2, -1) @ AYf) * scaling_factor
     if localization_matrix_Lxy is not None:
         Pxy = Pxy * localization_matrix_Lxy
@@ -344,14 +346,16 @@ def _enkf_pert_obs_analysis(
         R_obs = torch.eye(d_obs, device=device, dtype=dtype).unsqueeze(0) * R_val
     else:
         R_obs = (sigma_y**2) * torch.eye(d_obs, device=device, dtype=dtype)
-
-    innovation_cov = Pyy + R_obs
+    if access_to_noise:
+        innovation_cov = Pyy + R_obs
+    else:
+        scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
+        innovation_cov = (centered_n_o.transpose(-2, -1) @ centered_n_o) * scaling_factor
     # #innovation_cov should be covariance of the observations
     # r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
     # noisy_observations = ensemble_y_f + r
     # centered_n_o, _ = center_ensemble(noisy_observations, rescale=False)
-    scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
-    innovation_cov = (centered_n_o.transpose(-2, -1) @ centered_n_o) * scaling_factor
+    
     ###
     #remove the innovation_cov just using y_hat. basically replace with y_hat covariance. 
     # to verify correctness, use large ensemble size (so that cov calc are stable) to verify implementation
@@ -615,6 +619,7 @@ def ensemble_kalman_filter_analysis(
     observation_y,          # (B, d_obs) or (d_obs,) or None
     observation_operator_ens, # (B, N_ensemble, d_state) -> (B, N_ensemble, d_obs)
     sigma_y,                # scalar or (B,)
+    access_to_noise,
     method="EnKF-PertObs",
     inflation_factor=1.0,   # scalar
     # For EnKF-PertObs
@@ -624,7 +629,7 @@ def ensemble_kalman_filter_analysis(
     localization_radius_letkf=None, # scalar
     coords_state_letkf=None,        # (d_state, D_coord)
     coords_obs_letkf=None,          # (d_obs, D_coord)
-    domain_letkf=None       # (D_coord,)
+    domain_letkf=None,       # (D_coord,)
 ):
     """ Main dispatcher for ensemble Kalman filter analysis (Batched) """
     kalman_gain_or_transform = None
@@ -634,7 +639,7 @@ def ensemble_kalman_filter_analysis(
         ensemble_a_raw = ensemble_f
     elif method == "EnKF-PertObs":
         ensemble_a_raw, kalman_gain_or_transform = _enkf_pert_obs_analysis(
-            ensemble_f, observation_y, observation_operator_ens, sigma_y,
+            ensemble_f, observation_y, observation_operator_ens, sigma_y, access_to_noise,
             localization_matrix_Lxy, localization_matrix_Lyy
         )
     elif method == "ESRF": # ETKF variant

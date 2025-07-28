@@ -108,7 +108,7 @@ def main():
         help="Where to save the plots"
     )
     parser.add_argument(
-        "--mc_penalty", action="store_true",
+        "--mc_penalty",
         help="Also look for and plot mean/cov/orig penalties"
     )
     args = parser.parse_args()
