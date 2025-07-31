@@ -504,7 +504,7 @@ def set_models(args):
 
 
 
-def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', loc_radius=None, save_pdf=False):
+def test_ClassicFilter(loader, args, access_to_noise, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', loc_radius=None, save_pdf=False):
 
     m = args.N
     
@@ -590,13 +590,15 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
                     
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args,
+                        access_to_noise=access_to_noise,
                         method='EnKF-PertObs',
                         localization_matrix_Lxy=loc_mat_vy, 
-                        localization_matrix_Lyy=loc_mat_yy 
+                        localization_matrix_Lyy=loc_mat_yy,
                     )
                 elif args.v == 'ESRF':
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args,
+                        access_to_noise=access_to_noise,
                         method='ESRF'
                     )
                 elif args.v == 'LETKF':
@@ -606,6 +608,7 @@ def test_ClassicFilter(loader, args, infl=1, H_info=None, plot_figures=True, fig
 
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args,
+                        access_to_noise=access_to_noise,
                         method='LETKF',
                         localization_radius_letkf=loc_radius,
                         coords_state_letkf=coords_state,

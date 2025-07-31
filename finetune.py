@@ -32,13 +32,18 @@ if __name__ == "__main__":
 
         # set models
         model_list = set_models(args)
-        model, infl_model, local_model, st_model1, st_model2 = model_list
-        ft_params = sum(sum(p.numel() for p in model.parameters()) for model in model_list[:3])
-        print(f'Fine-tuning parameters: {ft_params}')
+        if args.v == 'Affine-ydagger':
+            model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+            ft_params = sum(sum(p.numel() for p in model.parameters()) for model in model_list[:5])
+            print(f'Fine-tuning parameters: {ft_params}')
+        else:
+            model, infl_model, local_model, st_model1, st_model2 = model_list
+            ft_params = sum(sum(p.numel() for p in model.parameters()) for model in model_list[:3])
+            print(f'Fine-tuning parameters: {ft_params}')
 
 
         ##################### fine-tuning on different N
-        N_list = [5,10,15,20,40,60,100]
+        N_list = [5, 10, 15, 20, 40, 60, 100]
         # N_list = [20, 40]
         ori_batch_size = args.batch_size
 

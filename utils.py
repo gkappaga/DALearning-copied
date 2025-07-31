@@ -15,67 +15,96 @@ from torch.optim.lr_scheduler import LambdaLR
 from dapper.mods.KS import Model as DapperKS
 
 @contextmanager
-def redirect_output(save_folder, filename="output.txt", enable_redirect=True):
-    """
-    Context manager to redirect all stdout and stderr output to a specified file.
+# def redirect_output(save_folder, filename="output.txt", enable_redirect=True):
+#     """
+#     Context manager to redirect all stdout and stderr output to a specified file.
     
-    Args:
-        save_folder (str): The folder where the output file should be saved.
-        filename (str): The name of the output file (default: "output.txt").
-    """
-    if not enable_redirect:
-        # If redirection is not enabled, just yield and do nothing else.
-        try:
-            yield
-        finally:
-            # No cleanup needed if redirection was not active.
-            pass
-        return # Exit the function early
+#     Args:
+#         save_folder (str): The folder where the output file should be saved.
+#         filename (str): The name of the output file (default: "output.txt").
+#     """
+#     if not enable_redirect:
+#         # If redirection is not enabled, just yield and do nothing else.
+#         try:
+#             yield
+#         # finally:
+#         #     # No cleanup needed if redirection was not active.
+#         #     pass
+#         return # Exit the function early
 
-    # Ensure the directory exists if redirection is enabled
+#     # Ensure the directory exists if redirection is enabled
+#     os.makedirs(save_folder, exist_ok=True)
+#     output_file = os.path.join(save_folder, filename)
+
+#     # Backup original stdout and stderr
+#     original_stdout = sys.stdout
+#     original_stderr = sys.stderr
+
+#     file_exists = os.path.exists(output_file)
+
+#     try:
+#         with open(output_file, "a") as f:  # Open in append mode
+#             if file_exists:
+#                 # Add a timestamp for new entries if the file already exists
+#                 f.write(f"\n--- New Session: [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ---\n")
+#             else:
+#                 # Optional: Add a header if the file is new
+#                 f.write(f"--- Log started: [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ---\n")
+
+#             sys.stdout = f
+#             sys.stderr = f
+#             yield  # Execute the code block within the context
+#     finally:
+#         # Restore stdout and stderr only if they were redirected
+#         if enable_redirect:
+#             sys.stdout = original_stdout
+#             sys.stderr = original_stderr
+#             # Notify in the console that output was appended
+#             # This message will go to the original stdout (e.g., the console)
+#             print(f"Output appended to {output_file}")
+    
+#     with open(output_file, "a") as f:  # Open in append mode
+#         if file_exists:
+#             f.write(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]\n")
+        
+#         sys.stdout = f
+#         sys.stderr = f
+#         try:
+#             yield  # Execute the code block within the context
+#         finally:
+#             # Restore stdout and stderr after execution
+#             sys.stdout = original_stdout
+#             sys.stderr = original_stderr
+#             print(f"Output appended to {output_file}")  # Notify in the console
+
+def redirect_output(save_folder, filename="output.txt", enable_redirect=True):
+    if not enable_redirect:
+        yield
+        return
+
     os.makedirs(save_folder, exist_ok=True)
     output_file = os.path.join(save_folder, filename)
+    file_exists = os.path.exists(output_file)
 
-    # Backup original stdout and stderr
     original_stdout = sys.stdout
     original_stderr = sys.stderr
 
-    file_exists = os.path.exists(output_file)
-
     try:
-        with open(output_file, "a") as f:  # Open in append mode
+        with open(output_file, "a") as f:
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             if file_exists:
-                # Add a timestamp for new entries if the file already exists
-                f.write(f"\n--- New Session: [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ---\n")
+                f.write(f"\n--- New Session: [{timestamp}] ---\n")
             else:
-                # Optional: Add a header if the file is new
-                f.write(f"--- Log started: [{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ---\n")
+                f.write(f"--- Log started: [{timestamp}] ---\n")
 
             sys.stdout = f
             sys.stderr = f
-            yield  # Execute the code block within the context
+
+            yield  # ✅ only one yield
     finally:
-        # Restore stdout and stderr only if they were redirected
-        if enable_redirect:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            # Notify in the console that output was appended
-            # This message will go to the original stdout (e.g., the console)
-            print(f"Output appended to {output_file}")
-    
-    with open(output_file, "a") as f:  # Open in append mode
-        if file_exists:
-            f.write(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]\n")
-        
-        sys.stdout = f
-        sys.stderr = f
-        try:
-            yield  # Execute the code block within the context
-        finally:
-            # Restore stdout and stderr after execution
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            print(f"Output appended to {output_file}")  # Notify in the console
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        print(f"Output appended to {output_file}")
 
 def check_nan_in_model(model):
     for param in model.parameters():

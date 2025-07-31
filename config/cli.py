@@ -355,7 +355,7 @@ def get_parameters():
     if args.cp_load_path != "no":
         args.suffix += "_tuned"
     else:
-        args.suffix = ""
+        args.suffix += ""
     folder_name = os.path.join("save", datetime.datetime.now().strftime('%Y-%m-%d_%H-%M'))
     loss_type_name = "_".join([loss_type for loss_type in args.loss_type])
     folder_name += f"{args.dataset}_{args.sigma_y}_{args.N}_{args.train_steps}_{args.train_traj_num}_{loss_type_name}_{args.st_type}_{args.v}{args.suffix}"
