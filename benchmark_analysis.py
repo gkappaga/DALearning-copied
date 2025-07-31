@@ -300,6 +300,7 @@ def _enkf_pert_obs_analysis(
     observation_operator_ens, # (B, N_ensemble, d_state) -> (B, N_ensemble, d_obs)
     sigma_y,                # scalar or (B,)
     access_to_noise,
+    random_noise,
     localization_matrix_Lxy=None, # (d_state, d_obs), broadcasts
     localization_matrix_Lyy=None,  # (d_obs, d_obs), broadcasts
 ):
@@ -323,10 +324,11 @@ def _enkf_pert_obs_analysis(
     AYf, _ = center_ensemble(ensemble_y_f, rescale=False)
 
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
-    
-    # r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
-    sigma_y_exp = sigma_y.view(batch_size, 1, 1).expand_as(ensemble_y_f)
-    r = mean0(sigma_y_exp * torch.randn_like(ensemble_y_f))
+    if not random_noise:
+        r = mean0(sigma_y * torch.randn_like(ensemble_y_f))
+    else:
+        sigma_y_exp = sigma_y.view(batch_size, 1, 1).expand_as(ensemble_y_f)
+        r = mean0(sigma_y_exp * torch.randn_like(ensemble_y_f))
     noisy_observations = ensemble_y_f + r
     centered_n_o, _ = center_ensemble(noisy_observations, rescale=False)
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
@@ -501,8 +503,106 @@ def _letkf_core_etkf_update(
     local_A_a = T_transform @ local_A_f
     return local_mean_a, local_A_a
 
-
 def _letkf_analysis(
+    ensemble_f,             # (B, N_ensemble, d_state)
+    observation_y,          # (B, d_obs) or (d_obs,)
+    observation_operator_ens, # (B, N_ensemble, d_state) -> (B, N_ensemble, d_obs)
+    sigma_y,                # scalar observation error standard deviation
+    localization_radius,    # scalar
+    coords_state,           # (d_state, D_coord_state)
+    coords_obs,             # (d_obs, D_coord_obs)
+    domain=None     # (D_coord_state,) or (D_coord_obs,)
+):
+    """ Local Ensemble Transform Kalman Filter (LETKF) - Analysis Step (Batched) """
+    batch_size, N_ensemble, d_state = ensemble_f.shape
+    device = ensemble_f.device; dtype = ensemble_f.dtype
+
+    if observation_y.ndim == 1:
+        obs_y_eff = observation_y.unsqueeze(0) # (1, d_obs)
+        d_obs = observation_y.shape[0]
+    else:
+        obs_y_eff = observation_y # (B, d_obs)
+        d_obs = observation_y.shape[-1]
+        if obs_y_eff.shape[0] != batch_size and obs_y_eff.shape[0] != 1:
+             raise ValueError("Batch size of observation_y must match ensemble_f or be 1.")
+
+    # ensemble_y_f: (B, N_ensemble, d_obs)
+    ensemble_y_f = observation_operator_ens(ensemble_f)
+    # Af_global: (B, N_ensemble, d_state), mean_f_global: (B, 1, d_state)
+    Af_global, mean_f_global = center_ensemble(ensemble_f, rescale=False)
+    # AYf_global: (B, N_ensemble, d_obs), mean_yf_global: (B, 1, d_obs)
+    AYf_global, mean_yf_global = center_ensemble(ensemble_y_f, rescale=False)
+
+    # innovation_mean_global: (B, 1, d_obs)
+    innovation_mean_global = obs_y_eff.unsqueeze(1) - mean_yf_global
+    
+    # Transform observations and innovations by R^-1/2 (here R = sigma_y^2 * I)
+    AYf_global_transformed = AYf_global / sigma_y         # (B, N_ensemble, d_obs)
+    innovation_mean_global_transformed = innovation_mean_global / sigma_y # (B, 1, d_obs)
+
+    # Initialize analysis ensemble parts
+    ensemble_a_mean_parts = torch.zeros_like(mean_f_global) # (B, 1, d_state)
+    ensemble_a_anom_parts = torch.zeros_like(Af_global)   # (B, N_ensemble, d_state)
+
+    # Loop over each state variable to update it locally
+    for k_state_idx in range(d_state):
+        # current_mean_f_k: (B, 1) mean of k-th state var for all batches
+        current_mean_f_k = mean_f_global[:, :, k_state_idx]
+        # current_Af_k: (B, N_ensemble, 1) anomalies of k-th state var
+        current_Af_k = Af_global[:, :, k_state_idx].unsqueeze(-1)
+
+        # --- Localization: This part is NOT batched over `batch_size` ---
+        # --- It's computed once per k_state_idx as coords are shared ---
+        # Coords for k-th state var: (1, D_coord)
+        coord_k_state = coords_state[k_state_idx].unsqueeze(0)
+
+        # Distances from k-th state variable to all observations: (1, d_obs)
+        # Assumes pairwise_distances can handle (N,D) (M,D) -> (N,M) inputs
+        # or a specific 2D version is used for these non-batched coordinates.
+        dist_state_k_to_obs = pairwise_distances(
+            coord_k_state, coords_obs, domain=domain
+        ).squeeze(0) # -> (d_obs,)
+        
+        rho_k = dist2coeff(dist_state_k_to_obs, localization_radius) # (d_obs,)
+        local_obs_indices = torch.where(rho_k > 1e-6)[0] # (N_y_local_k,)
+        
+        if len(local_obs_indices) == 0: # No observations influence this state variable
+            ensemble_a_mean_parts[:, :, k_state_idx] = current_mean_f_k
+            ensemble_a_anom_parts[:, :, k_state_idx] = current_Af_k.squeeze(-1)
+            continue
+
+        # Select local observations for this k_state_idx
+        # These are now batched over `batch_size`
+        # AYf_local_k_transformed: (B, N_ensemble, N_y_local_k)
+        AYf_local_k = AYf_global_transformed[:, :, local_obs_indices]
+        # innov_local_k_transformed: (B, 1, N_y_local_k)
+        innov_local_k = innovation_mean_global_transformed[:, :, local_obs_indices]
+        
+        # Apply localization weights to observations (sqrt_rho acts on transformed obs anoms)
+        rho_local_k_weights = rho_k[local_obs_indices] # (N_y_local_k,)
+        # sqrt_rho_local_k broadcastable: (1, 1, N_y_local_k)
+        sqrt_rho_local_k_bcast = torch.sqrt(rho_local_k_weights).view(1, 1, -1)
+
+        # eff_AYf_k_anom: (B, N_ensemble, N_y_local_k)
+        eff_AYf_k_anom = AYf_local_k * sqrt_rho_local_k_bcast
+        # eff_innov_k: (B, 1, N_y_local_k) -> squeezed to (B, N_y_local_k)
+        eff_innov_k = (innov_local_k * sqrt_rho_local_k_bcast).squeeze(1)
+
+        # Core ETKF update for (k_state_idx, and all batches)
+        # current_mean_f_k is (B,1), current_Af_k is (B, N_ens, 1)
+        updated_mean_k, updated_A_k = _letkf_core_etkf_update(
+            current_mean_f_k, current_Af_k,
+            eff_AYf_k_anom, eff_innov_k, N_ensemble
+        )
+        # updated_mean_k: (B,1), updated_A_k: (B, N_ensemble, 1)
+
+        ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k
+        ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_k.squeeze(-1)
+
+    ensemble_a = ensemble_a_mean_parts + ensemble_a_anom_parts
+    return ensemble_a, None
+
+def _letkf_analysis_random_noise(
     ensemble_f,             # (B, N_ensemble, d_state)
     observation_y,          # (B, d_obs) or (d_obs,)
     observation_operator_ens, # (B, N_ensemble, d_state) -> (B, N_ensemble, d_obs)
@@ -620,6 +720,7 @@ def ensemble_kalman_filter_analysis(
     observation_operator_ens, # (B, N_ensemble, d_state) -> (B, N_ensemble, d_obs)
     sigma_y,                # scalar or (B,)
     access_to_noise,
+    random_noise,
     method="EnKF-PertObs",
     inflation_factor=1.0,   # scalar
     # For EnKF-PertObs
@@ -640,7 +741,7 @@ def ensemble_kalman_filter_analysis(
     elif method == "EnKF-PertObs":
         ensemble_a_raw, kalman_gain_or_transform = _enkf_pert_obs_analysis(
             ensemble_f, observation_y, observation_operator_ens, sigma_y, access_to_noise,
-            localization_matrix_Lxy, localization_matrix_Lyy
+            random_noise, localization_matrix_Lxy, localization_matrix_Lyy
         )
     elif method == "ESRF": # ETKF variant
         ensemble_a_raw, kalman_gain_or_transform = _ersf_analysis(
@@ -651,11 +752,18 @@ def ensemble_kalman_filter_analysis(
            coords_state_letkf is None or \
            coords_obs_letkf is None:
             raise ValueError("LETKF requires localization_radius, coords_state, and coords_obs.")
-        ensemble_a_raw, kalman_gain_or_transform = _letkf_analysis(
-            ensemble_f, observation_y, observation_operator_ens, sigma_y,
-            localization_radius_letkf, coords_state_letkf,
-            coords_obs_letkf, domain_letkf
-        )
+        if random_noise:
+            ensemble_a_raw, kalman_gain_or_transform = _letkf_analysis_random_noise(
+                ensemble_f, observation_y, observation_operator_ens, sigma_y,
+                localization_radius_letkf, coords_state_letkf,
+                coords_obs_letkf, domain_letkf
+            )
+        else:
+            ensemble_a_raw, kalman_gain_or_transform = _letkf_analysis(
+                ensemble_f, observation_y, observation_operator_ens, sigma_y,
+                localization_radius_letkf, coords_state_letkf,
+                coords_obs_letkf, domain_letkf
+            )
     else:
         raise ValueError(f"Unknown EnKF method: {method}")
 

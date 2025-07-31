@@ -199,6 +199,7 @@ def get_parameters():
     parser.add_argument('--test_only', action='store_true', help='Only do the test part')
     parser.add_argument('--redirect_output', action='store_true', help='Redirect the output to a txt file')
     parser.add_argument('--access_to_noise', action='store_true', help='Access to noise')
+    parser.add_argument('--random_noise', action='store_true', help='Use random noise for sigma_y')
 
     # version setting
     parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine', 'Affine-ydagger'],

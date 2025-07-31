@@ -32,6 +32,7 @@ python finetune.py \
     --epochs 20 \
     --save_epoch 20 \
     --dataset lorenz96 \
+    --v Affine-ydagger \
     --train_steps 60 \
     --train_traj_num 8192 \
     --seed 42 \

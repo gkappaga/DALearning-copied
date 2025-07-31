@@ -60,9 +60,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         t_start = time.time()
         batch_v = batch_v.to(device=args.device)
         B = batch_v.shape[1]  # number of trajectories
-        sigma_y_batch = (
-            torch.rand(B, device=args.device) * (0.9) + 0.1
-        )
+        if args.random_noise:
+            sigma_y_batch = (
+                torch.rand(B, device=args.device) * (0.9) + 0.1
+            )
 
         # Sample from prior
         ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
@@ -87,9 +88,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         for i in range(end_ind):
             # get next observation
             obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
-            # obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
-            sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
-            obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
+            if not args.random_noise:
+                obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+            else:
+                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+                obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
 
             # forecast step
             ens_v_a = ens_v_a.reshape(-1, args.ori_dim)
@@ -109,9 +112,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             d = hv.shape[2]
             
             # generate a random variable for the observation noise
-            # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
-            sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
-            r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
+            if not args.random_noise:
+                r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+            else:
+                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
 
             ens_i = obs_y - hv - r
             
@@ -246,9 +251,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
                 ens_v_a = Av + By + a_exp + ens_v_f
             elif args.v == 'Affine-ydagger':
-                # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
-                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
-                r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
+                if not args.random_noise:
+                    r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                else:
+                    sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                    r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
                 obs_plus_noise = hv + r
                 s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                 nn_input = torch.cat([
@@ -277,67 +284,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             if args.mc_penalty:
                 nan_mask = torch.isnan(ens_v_a).any(dim=(1, 2))  
                 valid_B_mask = ~nan_mask
-                ###
-                # SEPARATE INTO 3 FUNCTIONS FOR LOSS AND PENALTIES
-                ###
-                # orig_loss, mean_penalty, cov_penalty = compute_loss_last(ens_tensor = ens_v_a,
-                #                             true_v = batch_v[i + 1],
-                #                             loss_type=args.loss_type,
-                #                             valid_B_mask=valid_B_mask,
-                #                             norm_p = args.es_p,
-                #                             kes_sigma = args.kes_sigma,
-                #                             # return_sum = True,
-                #                             H_info=H_info,
-                #                             A = A_mat,
-                #                             B_mat = B_mat,
-                #                             a = a_vec,
-                #                             args = args,
-                #                             lambda1 = args.lambda1,
-                #                             lambda2 = args.lambda2)
-                # orig_loss = 0
-                # for loss_type in args.loss_type:
-                #     orig_loss += compute_loss(
-                #         ens_tensor=ens_v_a.unsqueeze(0),
-                #         batch_v=batch_v[i + 1].unsqueeze(0),
-                #         loss_type=loss_type,
-                #         # ignore_first=ignore_first,
-                #         end_ind=None,
-                #         valid_B_mask=valid_B_mask,
-                #         norm_p=args.es_p,
-                #         kes_sigma=args.kes_sigma
-                #     )
-                # mean_penalty = compute_mean_pen(
-                #     ens_tensor=ens_v_a,
-                #     true_v=batch_v[i + 1],
-                #     valid_B_mask=valid_B_mask,
-                #     return_sum=False,
-                #     H_info=H_info,
-                #     # ignore_first=ignore_first,
-                #     A=A_mat,
-                #     B_mat=B_mat,
-                #     a=a_vec,
-                #     args=args,
-                #     lambda1=args.lambda1
-                # )
-                # cov_penalty = compute_cov_pen(
-                #     ens_tensor=ens_v_a,
-                #     valid_B_mask=valid_B_mask,
-                #     return_sum=False,
-                #     H_info=H_info,
-                #     A=A_mat,
-                #     B_mat=B_mat,
-                #     a=a_vec,
-                #     args=args,
-                #     lambda2=args.lambda2
-                # )
-                # step_loss = orig_loss + mean_penalty + cov_penalty
-                # loss = step_loss if loss is None else loss + step_loss
-                # # loss += orig_loss + mean_penalty + cov_penalty
-                # running_orig_loss += orig_loss.item()
-                # running_mean_pen += mean_penalty.item()
-                # running_cov_pen += cov_penalty.item()
-                # mc_batches += 1
-                # total_mc_batches += 1
             
                        
             if epoch <= args.detach_training_epoch: # if epoch % 5 == 0:
@@ -453,21 +399,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             # raise RuntimeError("All batches resulted in NaN loss. Stopping training.")
             loss = torch.tensor(float('nan')) 
             losses.update(loss.item(), 1)
-        
-        # if args.mc_penalty and total_mc_batches > 0:
-        #         avg_orig_pen = running_orig_loss / total_mc_batches
-        #         # epoch_orig_penalty.update(avg_orig_pen, 1)
-        #         epoch_orig_penalty += float(avg_orig_pen)
-        #         avg_mean_pen = running_mean_pen / total_mc_batches
-        #         # epoch_mean_penalty.update(avg_mean_pen, 1)
-        #         epoch_mean_penalty += float(avg_mean_pen)
-        #         avg_cov_pen  = running_cov_pen  / total_mc_batches
-        #         # epoch_cov_penalty.update(avg_cov_pen, 1)
-        #         epoch_cov_penalty += float(avg_cov_pen)
-        #         pen_str = f'| Orig {avg_orig_pen:.4f} MeanPen {avg_mean_pen:.4f} CovPen {avg_cov_pen:.4f}'
-        #         count += 1
-        # else:
-        #     pen_str = ''
+
         if not args.mc_penalty:
             pen_str = ''
         if (batch_ind + 1) % args.print_batch == 0:
@@ -523,9 +455,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         for batch_ind, batch_v in enumerate(loader):
             batch_v = batch_v.to(device=args.device)
             B = batch_v.shape[1]  # number of trajectories
-            sigma_y_batch = (
-                torch.rand(B, device=args.device) * (0.9) + 0.1
-            )
+            if args.random_noise:
+                sigma_y_batch = (
+                    torch.rand(B, device=args.device) * (0.9) + 0.1
+                )
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
             ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -539,9 +472,11 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 t_start = time.time()
                 # get next observation
                 obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
-                # obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
-                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
-                obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
+                if not args.random_noise:
+                    obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+                else:
+                    sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+                    obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
                 # forecast step
                 ens_v_a = ens_v_a.reshape(-1, args.ori_dim)
                 for j in range(args.dt_iter):
@@ -563,9 +498,11 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 d = hv.shape[2]
                 
                 # generate a random variable for the observation noise
-                # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
-                sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
-                r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
+                if not args.random_noise:
+                    r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                else:
+                    sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                    r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
                 ens_i = obs_y - hv - r
                 
                 # for the ensemble dataset and observations
@@ -688,9 +625,11 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                     ens_v_a = Av + By + a_exp + ens_v_f
                 elif args.v == 'Affine-ydagger':
-                    # r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
-                    sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
-                    r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
+                    if not args.random_noise:
+                        r = mean0(args.sigma_y * torch.randn_like(hv, device=args.device))
+                    else:
+                        sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(hv)
+                        r = mean0(sigma_y_exp * torch.randn_like(hv, device=args.device))
                     obs_plus_noise = hv + r
                     s_v_h = st_model1(torch.cat([ens_v_f, obs_plus_noise], dim = -1))
                     nn_input = torch.cat([
