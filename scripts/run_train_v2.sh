@@ -13,14 +13,14 @@ cd ..
 #     --loss_type 'nl2' \
 
 python train.py \
-    --dataset lorenz96 \
+    --dataset lorenz63 \
     --N 10 \
-    --sigma_y 0.7 \
     --seed 42 \
     --v 'Affine-ydagger' \
     --epochs 1000 \
     --save_epoch 50 \
     --loss_type 'nl2' \
+    --random_noise \
 
 # python train.py \
 #     --dataset lorenz96 \

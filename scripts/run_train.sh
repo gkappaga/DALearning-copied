@@ -33,24 +33,24 @@ cd ..
 #     --save_epoch 50 \
 #     --loss_type 'nl2' \
 
-# python train.py \
-#     --dataset lorenz96 \
-#     --N 10 \
-#     --sigma_y 1 \
-#     --seed 42 \
-#     --v 'Affine-ydagger' \
-#     --epochs 1000 \
-#     --save_epoch 50 \
-#     --loss_type 'nl2' \
-
-python finetune.py \
+python train.py \
     --dataset lorenz96 \
+    --N 10 \
     --seed 42 \
     --v 'Affine-ydagger' \
-    --epochs 500 \
+    --epochs 1000 \
     --save_epoch 50 \
     --loss_type 'nl2' \
-    --cp_load_path save/2025-07-21_22-00lorenz96_1.0_10_60_8192_nl2_joint_Affine-ydagger/cp_1000.pth \
+    --random_noise \
+
+# python finetune.py \
+#     --dataset lorenz96 \
+#     --seed 42 \
+#     --v 'Affine-ydagger' \
+#     --epochs 500 \
+#     --save_epoch 50 \
+#     --loss_type 'nl2' \
+#     --cp_load_path save/2025-07-21_22-00lorenz96_1.0_10_60_8192_nl2_joint_Affine-ydagger/cp_1000.pth \
 
 # python train.py \
 #     --dataset lorenz63 \

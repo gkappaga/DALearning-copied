@@ -122,7 +122,8 @@ def compute_kernel_es(ens_states, true_states, sigma=None):
 
 
 def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None, 
-                 valid_B_mask=None, norm_p=1, kes_sigma=1, return_sum=False, normalize_val=None):
+                 valid_B_mask=None, norm_p=1, kes_sigma=1, return_sum=False, normalize_val=None,
+                 weights=None):
     """
     Computes loss. Supports various types including L2, ES, and kernel ES.
 
@@ -234,10 +235,12 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
     else:
         raise NotImplementedError(f"Loss type '{loss_type}' is not implemented")
     
-    masked_loss_values = loss_values_per_element[valid_B_mask_sliced]
+    masked_loss_values = loss_values_per_element[valid_B_mask_sliced] # modify with the weights according to sigma
+    ### add some debug print statements
     if masked_loss_values.numel() == 0:
         return torch.tensor(0.0, device=batch_v.device, requires_grad=True)
-
+    if weights is not None:
+        masked_loss_values = loss_values_per_element @ weights
     if return_sum:
         return torch.sum(masked_loss_values)
     else:

@@ -504,7 +504,7 @@ def set_models(args):
 
 
 
-def test_ClassicFilter(loader, args, access_to_noise, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', loc_radius=None, save_pdf=False):
+def test_ClassicFilter(loader, args, access_to_noise, plot, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', loc_radius=None, save_pdf=False):
 
     m = args.N
     
@@ -528,11 +528,15 @@ def test_ClassicFilter(loader, args, access_to_noise, infl=1, H_info=None, plot_
         
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
+            print(f'Processing batch {batch_ind + 1}/{len(loader)}')
             batch_v = batch_v.to(device=args.device)
             B = batch_v.shape[1]
             if args.random_noise:
                 sigma_y_batch = (
                     torch.rand(B, device=args.device) * (0.9) + 0.1
+                )
+                sigma_y_batch = (
+                    torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
                 )
 
             # Sample from prior
@@ -705,5 +709,10 @@ def test_ClassicFilter(loader, args, access_to_noise, infl=1, H_info=None, plot_
         mean_crps, std_crps = get_mean_std(crps_tensor_all[valid_B_mask])
         
         no_nan_percent = torch.sum(valid_B_mask) / args.test_traj_num
+    
+    if plot:
+        if args.random_noise:
+            return rrmse_tensor_all[valid_B_mask], sigma_y_batch
+        return rrmse_tensor_all[valid_B_mask].mean().item()
 
     return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent

@@ -81,8 +81,6 @@ if __name__ == "__main__":
             #     dapper_array = sigma_y_0_7_array
             # else:
             #     raise NotImplementedError
-        if args.N != 1000:
-            print(dapper_array.shape)
             loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
             print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
             print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
@@ -93,7 +91,7 @@ if __name__ == "__main__":
         print(f"Test {args.v} Results")
         loss_list_nn = []
         mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
-            test_ClassicFilter(test_loader, args, args.access_to_noise, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', infl=infl, loc_radius=loc_radius, save_pdf=True)
+            test_ClassicFilter(test_loader, args, args.access_to_noise, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', infl=infl, loc_radius=loc_radius, save_pdf=True)
         print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")

@@ -64,7 +64,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             sigma_y_batch = (
                 torch.rand(B, device=args.device) * (0.9) + 0.1
             )
-
         # Sample from prior
         ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
         ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -221,24 +220,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 A_mat = nn_output[:, :args.ori_dim**2].view(B, args.ori_dim, args.ori_dim)
                 B_mat = nn_output[:, args.ori_dim**2: args.ori_dim**2+ args.ori_dim*args.obs_dim].view(B, args.ori_dim, args.obs_dim)
                 a_vec = nn_output[:, -args.ori_dim:].view(B, args.ori_dim)
-                # Vnn2 = ens_v_f - mean_ens_v_f
-                # Ynn = hv - mean_hv
-                # R = args.sigma_y**2 * torch.eye(args.obs_dim, device=args.device)
-                # R = R.unsqueeze(0).expand(ens_v_f.shape[0], args.obs_dim, args.obs_dim)
-                # K1 = torch.bmm(Vnn2.transpose(1, 2), Ynn) 
-                # K2 = torch.bmm(Ynn.transpose(1, 2), Ynn) + R * (N - 1)
-                # K = torch.bmm(K1, torch.inverse(K2))
-
-                # vbar = ens_v_f.mean(dim=1)
-                # ybar = hv.mean(dim=1)
-
-                # I     = torch.eye(D, device=args.device).unsqueeze(0).expand(ens_v_f.shape[0], D, D)
-                # term1 = torch.bmm((I - A), vbar.unsqueeze(-1))
-                # term2 = torch.bmm(K, torch.transpose(obs_y, 1, 2))
-                # term3 = torch.bmm((B + K), ybar.unsqueeze(-1))
-
-                # a = term1 + term2 - term3
-                # a = a.squeeze(-1)
 
                 Av = torch.bmm(A_mat, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
@@ -312,6 +293,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 num_all_nan_batch += 1
             else:
                 loss = 0
+                weights = 1/sigma_y_batch
                 for loss_type in args.loss_type:
                     loss += compute_loss(ens_tensor=ens_tensor, 
                                         batch_v=batch_v, 
@@ -320,7 +302,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                         end_ind=None, 
                                         valid_B_mask=valid_B_mask,
                                         norm_p=args.es_p,
-                                        kes_sigma=args.kes_sigma)
+                                        kes_sigma=args.kes_sigma,
+                                        weights=weights)
 
                 success_count += torch.sum(valid_B_mask)
                 
@@ -419,7 +402,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     else:
         return losses.avg
 
-def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', analysis = False):
+def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', analysis=False, plot=False):
     if args.v == 'Affine-ydagger':
         model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
     else:
@@ -458,6 +441,9 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
             if args.random_noise:
                 sigma_y_batch = (
                     torch.rand(B, device=args.device) * (0.9) + 0.1
+                )
+                sigma_y_batch = (
+                    torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
                 )
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
@@ -737,14 +723,6 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
             kalmans = torch.stack(kalmans, dim=0)
             avhat = torch.stack(avhat, dim=0)
         if plot_figures:
-            # plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
-            #                                         true_traj=batch_v[:,0,:], 
-            #                                         dim_indices=[0, 1, 2, 3],
-            #                                         num_time_steps=100, 
-            #                                         mode='color',
-            #                                         save_fig=True,
-            #                                         save_name=fig_name,
-            #                                         hist_step=2)
             plot_particle_trajectories_with_histograms(particles=ens_tensor[:,0,:,:], 
                                                     true_traj=batch_v[:,0,:], 
                                                     # observation=observations[:,-2,:],
@@ -785,6 +763,8 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         an_results = [means_per_traj, stds_per_traj, mean_traj_element_wise_std, std_traj_element_wise_std]
         return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm, an_results, aydag, ayhat, kalmans, avhat
 
+    if plot:
+        return rrmse_tensor_all[valid_B_mask], sigma_y_batch
     return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor
 
 def test_SequentialEnKF(loader, args, infl=1, H_info=None, localization=False):
