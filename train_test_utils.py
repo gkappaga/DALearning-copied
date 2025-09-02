@@ -602,10 +602,10 @@ def test_ClassicFilter(loader, args, access_to_noise, plot, infl=1, H_info=None,
                             "sigma_y": args.sigma_y,
                             "inflation_factor": infl
                         }
+                print(sigma_y_batch.shape)
                 if args.v == 'EnKF':
                     loc_mat_vy = dist2coeff(args.Lvy, radius=loc_radius).unsqueeze(0)
                     loc_mat_yy = dist2coeff(args.Lyy, radius=loc_radius).unsqueeze(0)
-                    
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args,
                         access_to_noise=access_to_noise,

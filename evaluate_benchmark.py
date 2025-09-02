@@ -1,6 +1,16 @@
 import os
 
 import torch
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.use_deterministic_algorithms(True)   # may throw if an op has no det. path
+
+# Turn off TF32 to avoid GEMM path changes
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
+# CUBLAS determinism for matmuls (set before import torch if possible)
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"  # or ":4096:8"
 import torch.nn as nn
 import pandas as pd
 import numpy as np
@@ -11,6 +21,7 @@ from utils import setup_optimizer_and_scheduler, load_checkpoint
 from utils import partial_obs_operator, get_dataloader, redirect_output
 
 from train_test_utils import test_ClassicFilter
+from train_test_utils_v2 import test_ClassicFilter_v2
 
 def get_benchmarks(args):
     """
@@ -26,7 +37,21 @@ def get_benchmarks(args):
     file_path = f'save/benchmark/benchmarks_{args.dataset}.csv'
     df = pd.read_csv(file_path, usecols=['method', 'N', 'sigma_y', 'best_loc_rad','best_infl','rmse', 'rrmse_mean'])
 
-    method = "LETKF"
+    method = args.v
+    if method == 'EnKF':
+        method = 'EnKF_PertObs'
+    if method == 'ESRF':
+        method = 'EnKF_Sqrt'
+    if method == 'iEnKS-PertObs':
+        method = 'iEnKF_PertObs'
+    if method == 'iEnKS-Sqrt':
+        method = 'iEnKF'
+    # if method == 'LETKF':
+    # method = 'LETKF'
+    
+    # method = args.v
+    if method == 'iEnKS-PertObs':
+        method = 'iEnKF_PertObs'
     method_data = df[(df['method'] == method) & (df['N'] == args.N)]
     
     # Filter rows where sigma_y == 1 and 0.7
@@ -90,38 +115,41 @@ if __name__ == "__main__":
         # test
         print(f"Test {args.v} Results")
         loss_list_nn = []
-        mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
-            test_ClassicFilter(test_loader, args, args.access_to_noise, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', infl=infl, loc_radius=loc_radius, save_pdf=True)
-        print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
-        print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
-        print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")
-        print(f"CRPS: {mean_crps_nn:.3f} ± {std_crps_nn:.3f}")
-        print(f'No NAN Percentage: {no_nan_percent_nn * 100: .2f}%')
+        # mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
+        #     test_ClassicFilter(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, access_to_noise=True, infl=infl, loc_radius=loc_radius)
+
+        rmse = test_ClassicFilter_v2(test_loader, args, plot=True, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=infl, loc_radius=loc_radius)
+        # print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
+        # print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
+        # print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")
+        # print(f"CRPS: {mean_crps_nn:.3f} ± {std_crps_nn:.3f}")
+        # print(f'No NAN Percentage: {no_nan_percent_nn * 100: .2f}%')
+        print(rmse)
         
             
         # save results
-        tensor_dict = {
-            'nn':{
-                'mean_rmse':mean_rmse_nn,
-                'std_rmse':std_rmse_nn,
-                'mean_rrmse':mean_rrmse_nn,
-                'std_rrmse':std_rrmse_nn,
-                'mean_rmv':mean_rmv_nn,
-                'std_rmv':std_rmv_nn,
-                'valid_percent':no_nan_percent_nn,
-                'loc_diff_dist':args.diff_dist,
-            },
-            'cp_load_path': args.cp_load_path,
-            'sigma_y': args.sigma_y,
-        }
+        # tensor_dict = {
+        #     'nn':{
+        #         'mean_rmse':mean_rmse_nn,
+        #         'std_rmse':std_rmse_nn,
+        #         'mean_rrmse':mean_rrmse_nn,
+        #         'std_rrmse':std_rrmse_nn,
+        #         'mean_rmv':mean_rmv_nn,
+        #         'std_rmv':std_rmv_nn,
+        #         'valid_percent':no_nan_percent_nn,
+        #         'loc_diff_dist':args.diff_dist,
+        #     },
+        #     'cp_load_path': args.cp_load_path,
+        #     'sigma_y': args.sigma_y,
+        # }
         
         # print(torch.mean((ens_tensor_enkf.mean(dim=2) - ens_tensor_nn.mean(dim=2))**2, dim=(1,2))[:100])
         
-        record_name = f"output_records_{args.N}.pt"
-        record_path = os.path.join(folder_name, record_name)
-        torch.save(tensor_dict, record_path)
-        if args.cp_load_path != "no":
-            if args.zero_infl:
-                torch.save(tensor_dict, os.path.join(folder_name, f"output_records_zero_infl_{args.N}.pt"))
-            else:
-                torch.save(tensor_dict, os.path.join(folder_name, f"output_records_{args.N}.pt"))
+        # record_name = f"output_records_{args.N}.pt"
+        # record_path = os.path.join(folder_name, record_name)
+        # torch.save(tensor_dict, record_path)
+        # if args.cp_load_path != "no":
+        #     if args.zero_infl:
+        #         torch.save(tensor_dict, os.path.join(folder_name, f"output_records_zero_infl_{args.N}.pt"))
+        #     else:
+        #         torch.save(tensor_dict, os.path.join(folder_name, f"output_records_{args.N}.pt"))

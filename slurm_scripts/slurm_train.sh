@@ -2,12 +2,12 @@
 
 # Submit this script with: sbatch <this-filename>
 
-#SBATCH --time=12:00:00     # walltime (2 days)
+#SBATCH --time=1-12:00:00     # walltime (1 days)
 #SBATCH --nodes=1           # number of nodes (1 node)
 #SBATCH --gres=gpu:1        # 4 GPUs of any type
 #SBATCH --partition=gpu     # use GPU partition
 #SBATCH --ntasks=1          # 1 task
-#SBATCH -J "FT"   # job name
+#SBATCH -J "L963k_sigma^2"   # job name
 #SBATCH --mail-user=gkappaga@caltech.edu # email address
 #SBATCH --mail-type=BEGIN   # email notification at start
 #SBATCH --mail-type=END     # email notification at end
@@ -22,4 +22,4 @@
 
 # Change to the directory containing v2_run_fine_tuning.sh
 cd $HOME/gkappaga-DALearning-2/DALearning-copied/scripts
-bash run_fine_tuning.sh
+bash run_train.sh

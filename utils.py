@@ -688,6 +688,7 @@ def partial_obs_operator(ori_dim, obs_inds, device, seed=None):
     proj = torch.zeros(ori_dim, len(obs_inds), device=device)
     for i, obs_ind in enumerate(obs_inds):
         proj[obs_ind, i] = 1
+    proj = proj.unsqueeze(0)
     def inner(x):
         return x @ proj
     return inner, proj

@@ -4,7 +4,7 @@ import os
 import pandas as pd
 from utils import redirect_output
 # Parameters to sweep
-methods = ['EnKF', 'LETKF', 'ESRF']
+methods = ['EnKF', 'ESRF', 'LETKF']
 N_values = [5, 10, 15, 20, 40, 60, 100]
 
 # Constants (edit as needed)
@@ -42,9 +42,9 @@ for method in methods:
                     '--v', method,
                     '--N', str(N),
                     '--cp_load_path', 'no',
+                    '--random_noise',
                     *extra_args  # append EnKF-specific args
                 ])
-
                 # Load output
                 model_folder = os.path.join('save/benchmark_models/', f"benchmark_{dataset}_varyingnoise_{method}{suffix}_{N}")
                 record_path = os.path.join(model_folder, f"output_records_{N}.pt")

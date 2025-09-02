@@ -293,7 +293,8 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 num_all_nan_batch += 1
             else:
                 loss = 0
-                weights = 1/sigma_y_batch
+                weights = 1/(sigma_y_batch**2)
+                # weights = torch.ones(B, device = args.device)
                 for loss_type in args.loss_type:
                     loss += compute_loss(ens_tensor=ens_tensor, 
                                         batch_v=batch_v, 

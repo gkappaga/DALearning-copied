@@ -153,7 +153,19 @@ def get_parameters():
                         help='trail name')
     parser.add_argument('--zero_infl', action='store_true',
                         help='set inflation to zero')
-    
+
+    #stochastic map filter setting
+    parser.add_argument('--smf_order', type=int, default=1,
+        help='Polynomial order for SMF map (linear=1).')
+    parser.add_argument('--smf_nonId_radius', type=int, default=None,
+        help='Leading state dims transformed by SMF; rest identity (default: all).')
+    parser.add_argument('--smf_offdiag_rad', type=float, default=None,
+        help='Localization radius for state-state covariance (None=off).')
+    parser.add_argument('--smf_rho', type=float, default=0.0,
+        help='Forecast inflation factor inside SMF.')
+    parser.add_argument('--smf_jitter', type=float, default=1e-6,
+        help='Numerical jitter added to covariances in SMF.')
+        
     # optimization setting
     parser.add_argument('--learning_rate', type=float_or_default, default='default',
                         help='learning rate')
@@ -200,9 +212,9 @@ def get_parameters():
     parser.add_argument('--redirect_output', action='store_true', help='Redirect the output to a txt file')
     parser.add_argument('--access_to_noise', action='store_true', help='Access to noise')
     parser.add_argument('--random_noise', action='store_true', help='Use random noise for sigma_y')
-
+    parser.add_argument('--access_to_H', action='store_true', help='Access to H')
     # version setting
-    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine', 'Affine-ydagger'],
+    parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine', 'Affine-ydagger', 'SMF', 'iEnKS-PertObs', 'iEnKS-Sqrt'],
                         default='EnKF', help='versions')
 
     args = parser.parse_args()

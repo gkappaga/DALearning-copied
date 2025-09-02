@@ -38,11 +38,13 @@ python train.py \
     --N 10 \
     --seed 42 \
     --v 'Affine-ydagger' \
-    --epochs 1000 \
-    --save_epoch 50 \
+    --epochs 3000 \
+    --save_epoch 100 \
     --loss_type 'nl2' \
+    --lr_decay_epochs 400,800,1200,1600,2000,2400,2800 \
+    --lr_decay_rate 0.7 \
     --random_noise \
-
+    --suffix '_3k_sigma^2_l96' \
 # python finetune.py \
 #     --dataset lorenz96 \
 #     --seed 42 \

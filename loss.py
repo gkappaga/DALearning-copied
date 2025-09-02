@@ -240,7 +240,7 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
     if masked_loss_values.numel() == 0:
         return torch.tensor(0.0, device=batch_v.device, requires_grad=True)
     if weights is not None:
-        masked_loss_values = loss_values_per_element @ weights
+        masked_loss_values = loss_values_per_element @ weights / loss_values_per_element.shape[1]
     if return_sum:
         return torch.sum(masked_loss_values)
     else:
