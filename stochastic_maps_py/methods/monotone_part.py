@@ -46,10 +46,12 @@ class MonotonePart:
         return self
 
     def evaluate(self, samples: torch.Tensor) -> torch.Tensor:
+        self._ensure_basis(samples)
         basis = self.basis_eval(samples)
         return (basis @ self._coeffs()).reshape(-1, 1)
 
     def grad_x(self, samples: torch.Tensor) -> torch.Tensor:
+        self._ensure_basis(samples)
         grad = self.basis_grad(samples)
         return (grad @ self._coeffs()).reshape(-1, 1)
 
@@ -162,6 +164,14 @@ class MonotonePart:
             hess[:, 1:-1] = -mid * delta[:, 1:-1] * (sqrt_two / widths[1:-1])
         hess[:, -1] = exp_delta[:, -1] / (widths[-1] * sqrt_two_pi)
         return hess
+
+    def _ensure_basis(self, samples: torch.Tensor) -> None:
+        if self.order == 1:
+            return
+        if self.centers is None or self.widths is None:
+            if samples is None:
+                raise ValueError("Samples required to construct basis.")
+            self.construct_basis(samples)
 
     @staticmethod
     def _invert_monotone_map(points: torch.Tensor, xx: torch.Tensor, yy: torch.Tensor) -> torch.Tensor:

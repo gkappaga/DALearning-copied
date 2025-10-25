@@ -114,6 +114,7 @@ class NonMonotonePart:
     def evaluate(self, samples: torch.Tensor) -> torch.Tensor:
         if self.ncoeff() == 0:
             return torch.full((samples.size(0), 1), float(self.const_term), dtype=torch.double)
+        self._ensure_basis(samples)
         basis = self.basis_eval(samples)
         coeffs = self._flatten_coeffs()
         return (basis @ coeffs).reshape(-1, 1) + self.const_term
@@ -121,6 +122,7 @@ class NonMonotonePart:
     def grad_x(self, samples: torch.Tensor) -> torch.Tensor:
         if self.ncoeff() == 0:
             return torch.zeros((samples.size(0), self.dimension), dtype=torch.double)
+        self._ensure_basis(samples)
         gradients = self.basis_grad(samples)
         coeffs = self._flatten_coeffs()
         coeffs_expanded = coeffs.view(1, 1, -1)
@@ -129,6 +131,7 @@ class NonMonotonePart:
     def hess_x(self, samples: torch.Tensor) -> torch.Tensor:
         if self.ncoeff() == 0:
             return torch.zeros((samples.size(0), self.dimension, self.dimension), dtype=torch.double)
+        self._ensure_basis(samples)
         hessians = self.basis_hess(samples)
         coeffs = self._flatten_coeffs()
         coeffs_expanded = coeffs.view(1, 1, 1, -1)
@@ -151,6 +154,16 @@ class NonMonotonePart:
             order_i = self.order[idx]
             self.coeffs[idx] = coeffs[counter:counter + order_i]
             counter += order_i
+
+    def _ensure_basis(self, samples: torch.Tensor) -> None:
+        if self.ncoeff() == 0:
+            return
+        missing = any(
+            (self.order[idx] > 1 and self.centers[idx] is None)
+            for idx in self.active_vars
+        )
+        if missing:
+            self.construct_basis(samples)
 
     def _centers_and_widths(self, samples: torch.Tensor, nrbf: int) -> Tuple[torch.Tensor, torch.Tensor]:
         samples = torch.sort(samples.flatten().to(torch.double))[0]
