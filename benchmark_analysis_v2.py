@@ -370,6 +370,7 @@ def _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z, x):
     # u = L^{-1} (x - μ_{x|z})
     y = (x - mu_x_given_z).transpose(1, 2)              # (B,K,N)
     u = torch.cholesky_solve(y, L).transpose(1, 2)      # (B,N,K)
+    u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
     return u
 
 
@@ -424,6 +425,7 @@ class SMFLinearKR:
         mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
         y = (x - mu_x_given_z).transpose(1,2)                # (B,K,N)
         u = torch.cholesky_solve(y, L).transpose(1,2)        # (B,N,K)
+        u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
         return u
 
     @torch.no_grad()
@@ -1504,73 +1506,74 @@ def ensemble_kalman_filter_analysis(
 # =======================================================================
 # Stochastic Map Filter extensions (appended)
 # =======================================================================
-def stochastic_map_filter_analysis(
-    ensemble_f,
-    observation_y,
-    sigma_y,
-    obs_indices,
-    options,
-):
-    """
-    Apply the stochastic-map filter analysis step to a batch of forecast ensembles.
-    Parameters
-    ----------
-    ensemble_f : torch.Tensor
-        Forecast ensembles of shape (B, N, d_state).
-    observation_y : torch.Tensor
-        Observations for the current assimilation step, shape (B, d_obs).
-    sigma_y : float or torch.Tensor
-        Observation noise standard deviation(s).
-    obs_indices : Iterable[int]
-        Indices of the observed state variables.
-    options : dict
-        Dictionary configuring the stochastic map filter (distMat, order_all, etc.).
-    """
-    import torch
-    from types import SimpleNamespace
-    try:
-        from stochastic_maps_py.methods import StochasticMapFilter
-    except ImportError as exc:  # pragma: no cover - dependency missing
-        raise RuntimeError("stochastic_maps_py package is required for SMF support.") from exc
-    ensemble_f = ensemble_f
-    batch_size, ensemble_size, state_dim = ensemble_f.shape
-    dist_matrix = torch.as_tensor(options.get("distMat"), dtype=torch.int64)
-    order_all = int(options.get("order_all", 2))
-    nonid_radius = int(options.get("nonId_radius", state_dim))
-    offdiag_radius = int(options.get("offdiag_rad", state_dim))
-    rho = float(options.get("rho", 0.0))
-    if torch.is_tensor(obs_indices):
-        obs_idx_list = [int(idx) for idx in obs_indices.tolist()]
-    else:
-        obs_idx_list = [int(idx) for idx in obs_indices]
-    if isinstance(sigma_y, torch.Tensor):
-        sigma_vec = sigma_y.detach().cpu().to(torch.double).reshape(-1)
-    else:
-        sigma_vec = torch.full((batch_size,), float(sigma_y), dtype=torch.double)
-    analyses = []
-    for b in range(batch_size):
-        sigma_val = float(sigma_vec[min(b, sigma_vec.numel() - 1)])
-        def sample_likelihood(x, noise_std=sigma_val):
-            return x + noise_std * torch.randn_like(x)
-        sm_options = {
-            "M": options.get("M", ensemble_size),
-            "distMat": dist_matrix,
-            "order_all": order_all,
-            "nonId_radius": nonid_radius,
-            "offdiag_rad": offdiag_radius,
-            "rho": rho,
-        }
-        model = SimpleNamespace(
-            d=state_dim,
-            data_idx=obs_idx_list,
-            sample_likelihood=sample_likelihood,
-        )
-        sm_filter = StochasticMapFilter(model, sm_options)
-        forecast = ensemble_f[b].detach().cpu().double()
-        obs = observation_y[b].detach().cpu().double()
-        analysis = sm_filter.sample_posterior(forecast, obs)
-        analyses.append(analysis.to(dtype=ensemble_f.dtype, device=ensemble_f.device))
-    return torch.stack(analyses, dim=0)
+# def stochastic_map_filter_analysis(
+#     ensemble_f,
+#     observation_y,
+#     sigma_y,
+#     obs_indices,
+#     options,
+# ):
+#     """
+#     Apply the stochastic-map filter analysis step to a batch of forecast ensembles.
+#     Parameters
+#     ----------
+#     ensemble_f : torch.Tensor
+#         Forecast ensembles of shape (B, N, d_state).
+#     observation_y : torch.Tensor
+#         Observations for the current assimilation step, shape (B, d_obs).
+#     sigma_y : float or torch.Tensor
+#         Observation noise standard deviation(s).
+#     obs_indices : Iterable[int]
+#         Indices of the observed state variables.
+#     options : dict
+#         Dictionary configuring the stochastic map filter (distMat, order_all, etc.).
+#     """
+#     import torch
+#     from types import SimpleNamespace
+#     try:
+#         from stochastic_maps_py.methods import StochasticMapFilter
+#     except ImportError as exc:  # pragma: no cover - dependency missing
+#         raise RuntimeError("stochastic_maps_py package is required for SMF support.") from exc
+#     ensemble_f = ensemble_f
+#     batch_size, ensemble_size, state_dim = ensemble_f.shape
+#     dist_matrix = torch.as_tensor(options.get("distMat"), dtype=torch.int64)
+#     order_all = int(options.get("order_all", 2))
+#     nonid_radius = int(options.get("nonId_radius", state_dim))
+#     offdiag_radius = int(options.get("offdiag_rad", state_dim))
+#     rho = float(options.get("rho", 0.0))
+#     if torch.is_tensor(obs_indices):
+#         obs_idx_list = [int(idx) for idx in obs_indices.tolist()]
+#     else:
+#         obs_idx_list = [int(idx) for idx in obs_indices]
+#     if isinstance(sigma_y, torch.Tensor):
+#         sigma_vec = sigma_y.detach().cpu().to(torch.double).reshape(-1)
+#     else:
+#         sigma_vec = torch.full((batch_size,), float(sigma_y), dtype=torch.double)
+#     analyses = []
+#     for b in range(batch_size):
+#         sigma_val = float(sigma_vec[min(b, sigma_vec.numel() - 1)])
+#         def sample_likelihood(x, noise_std=sigma_val):
+#             return x + noise_std * torch.randn_like(x)
+#         sm_options = {
+#             "M": options.get("M", ensemble_size),
+#             "distMat": dist_matrix,
+#             "order_all": order_all,
+#             "nonId_radius": nonid_radius,
+#             "offdiag_rad": offdiag_radius,
+#             "rho": rho,
+#         }
+#         model = SimpleNamespace(
+#             d=state_dim,
+#             data_idx=obs_idx_list,
+#             data_indices=obs_idx_list,  # new line
+#             sample_likelihood=sample_likelihood,
+#         )
+#         sm_filter = StochasticMapFilter(model, sm_options)
+#         forecast = ensemble_f[b].detach().cpu().double()
+#         obs = observation_y[b].detach().cpu().double()
+#         analysis = sm_filter.sample_posterior(forecast, obs)
+#         analyses.append(analysis.to(dtype=ensemble_f.dtype, device=ensemble_f.device))
+#     return torch.stack(analyses, dim=0)
 
 # ##############################################################################
 # # Lorenz 96 and RK4 for Testing

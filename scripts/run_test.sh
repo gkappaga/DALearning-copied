@@ -3,11 +3,11 @@
 cd ..
 
 # lorenz 63
-dataset="lorenz96"
+dataset="lorenz63"
 
 sigma_y=1
 seed=42
-save_dir="2025-07-24_14-27lorenz96_1.0_10_60_8192_nl2_joint_Affine-ydagger"
+save_dir="2025-08-08_20-06lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_l63"
 
 # sigma_y = $sigma_y, EnST
 for N in 5 10 15 20 40 60 100; do
@@ -18,7 +18,7 @@ for N in 5 10 15 20 40 60 100; do
         --v 'Affine-ydagger' \
         --seed $seed \
         --no_localization \
-        --cp_load_path save/${save_dir}/cp_1000.pth
+        --cp_load_path save/${save_dir}/cp_3000.pth
 done
 
 # sigma_y=0.7

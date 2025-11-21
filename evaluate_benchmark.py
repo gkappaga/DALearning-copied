@@ -38,10 +38,10 @@ def get_benchmarks(args):
     df = pd.read_csv(file_path, usecols=['method', 'N', 'sigma_y', 'best_loc_rad','best_infl','rmse', 'rrmse_mean'])
 
     method = args.v
-    if method == 'EnKF':
+    if method == 'SMF' or method == 'Affine-ydagger':
         method = 'EnKF_PertObs'
     if method == 'ESRF':
-        method = 'EnKF_Sqrt'
+        method = 'LETKF'
     if method == 'iEnKS-PertObs':
         method = 'iEnKF_PertObs'
     if method == 'iEnKS-Sqrt':
@@ -52,7 +52,7 @@ def get_benchmarks(args):
     # method = args.v
     if method == 'iEnKS-PertObs':
         method = 'iEnKF_PertObs'
-    method_data = df[(df['method'] == method) & (df['N'] == args.N)]
+    method_data = df[(df['method'] == method) & (df['N'] == 10)]
     
     # Filter rows where sigma_y == 1 and 0.7
     sigma_y_1 = method_data[method_data['sigma_y'] == 1][['best_loc_rad','best_infl','rmse', 'rrmse_mean']]
@@ -67,8 +67,82 @@ def get_benchmarks(args):
 
     return sigma_y_1_array, sigma_y_0_7_array
 
+import matplotlib.pyplot as plt
+
+def sweep_ensemble_sizes_for_rrmse(method_name, args_template):
+    """
+    Sweep over ensemble sizes N_list, evaluate SMF (or other method),
+    and produce a plot of mean RRMSE vs N.
+    """
+    N_list = [5, 10, 15, 20, 40, 60, 100]
+    rrmse_means = []
+
+    print("\n=== Running Ensemble Sweep ===\n")
+
+    for N in N_list:
+        print(f"\n--- Evaluating N = {N} ---")
+
+        # Copy args and override N
+        args = get_parameters()
+        args.N = N
+        args.v = method_name          # e.g. 'SMF'
+        args.test_only = True
+        args.seed = 42
+        args.random_noise = False     # IMPORTANT for consistent SMF
+        args.access_to_noise = False
+        args.redirect_output = False  # no file redirects
+        args.test_batch_size = 64
+        args.test_traj_num = 64*8     # can reduce for speed
+        args.dataset = 'lorenz63'
+
+        # H operator
+        H_info = partial_obs_operator(args.ori_dim, args.obs_inds, args.device)
+        test_loader = get_dataloader(args, test_only=True)
+
+        # Run test_ClassicFilter_v2 (automatically dispatches SMF)
+        metrics_or_rrmse = test_ClassicFilter_v2(
+            test_loader, args,
+            plot=False, H_info=H_info,
+            plot_figures=False, fig_name='tmp', save_pdf=False,
+            infl=0.0, loc_radius=None
+        )
+
+        # test_ClassicFilter_v2 returns RRMSE directly if plot=False
+        rrmse_mean = float(metrics_or_rrmse)
+        rrmse_means.append(rrmse_mean)
+
+        print(f"N={N}: mean RRMSE = {rrmse_mean:.4f}")
+
+    # Create plot
+    plt.figure(figsize=(6,4))
+    plt.plot(N_list, rrmse_means, marker='o')
+    plt.title(f"Mean RRMSE vs Ensemble Size for {method_name}")
+    plt.xlabel("Ensemble Size N")
+    plt.ylabel("Mean RRMSE")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"rrmse_vs_N_{method_name}.pdf")
+    plt.savefig(f"rrmse_vs_N_{method_name}.png")
+    plt.show()
+
+    return N_list, rrmse_means
+
+
 if __name__ == "__main__":
     args = get_parameters()
+    # args = get_parameters()
+    # args.test_only = True  # Set test_only to True for analysis
+    # # enkf_args.plot = args.plot
+    # args.N = 10
+    # args.v = 'ESRF'  # Set the method to EnKF for testing
+    # args.dataset = 'lorenz96'
+    # args.cp_load_path = 'no'  # No checkpoint loading for this test
+    # args.seed = 42
+    # args.random_noise = True  # Set access to noise for EnKF
+    # args.access_to_noise = False  # Access to noise for EnKF
+    # args.test_traj_num = 64*16
+    # args.test_batch_size = 64
+    # args.access_to_H = False
     suffix = ""
     
     if args.v == "EnKF" and hasattr(args, "access_to_noise"):
@@ -118,13 +192,14 @@ if __name__ == "__main__":
         # mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
         #     test_ClassicFilter(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, access_to_noise=True, infl=infl, loc_radius=loc_radius)
 
-        rmse = test_ClassicFilter_v2(test_loader, args, plot=True, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=infl, loc_radius=loc_radius)
+        rmse = test_ClassicFilter_v2(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=infl, loc_radius=loc_radius)
         # print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         # print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         # print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")
         # print(f"CRPS: {mean_crps_nn:.3f} ± {std_crps_nn:.3f}")
         # print(f'No NAN Percentage: {no_nan_percent_nn * 100: .2f}%')
         print(rmse)
+
         
             
         # save results
