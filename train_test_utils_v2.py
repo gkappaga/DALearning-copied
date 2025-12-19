@@ -649,10 +649,7 @@ def generate_and_cache_pf_results(loader, args, H_info, check_disk=True, calcula
     return final_metrics
 
 
-try:
-    _ORIGINAL_TEST_CLASSICFILTER_V2  # type: ignore[name-defined]
-except NameError:
-    _ORIGINAL_TEST_CLASSICFILTER_V2 = test_ClassicFilter_v2
+
 
 
 def _run_stochastic_map_filter(
@@ -1192,6 +1189,8 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 sigma_y_batch = (
                     torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
                 )
+            else:
+                sigma_y_batch = torch.full((B,), args.sigma_y, device=args.device)
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
             ens_v_a += torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
 
@@ -1368,7 +1367,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                         coords_obs=coords_obs, localization_domain=domain)
                 elif args.v == 'SMF':
                     # Choose observation operator: prefer matrix H if available, otherwise callable
-                    obs_op = H if isinstance(H, torch.Tensor) else H_fun
+                    obs_op = H_fun
 
                     # Ensure obs_y is (B, m)
                     obs_y_b = obs_y.squeeze(1) if (obs_y.ndim == 3 and obs_y.shape[1] == 1) else obs_y
@@ -2195,3 +2194,8 @@ def test_linear_sampling_error(loader, args, num_resamples):
         final_metrics['no_nan_percent'] = torch.sum(valid_B_mask).float() / all_results['rrmse'].numel() * 100.0
 
     return final_metrics
+
+try:
+    _ORIGINAL_TEST_CLASSICFILTER_V2  # type: ignore[name-defined]
+except NameError:
+    _ORIGINAL_TEST_CLASSICFILTER_V2 = test_ClassicFilter_v2

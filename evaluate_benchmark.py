@@ -38,7 +38,7 @@ def get_benchmarks(args):
     df = pd.read_csv(file_path, usecols=['method', 'N', 'sigma_y', 'best_loc_rad','best_infl','rmse', 'rrmse_mean'])
 
     method = args.v
-    if method == 'SMF' or method == 'Affine-ydagger':
+    if method == 'SMF' or method == 'Affine-ydagger' or method == 'EnKF':
         method = 'EnKF_PertObs'
     if method == 'ESRF':
         method = 'LETKF'

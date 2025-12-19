@@ -312,6 +312,41 @@ def _smf_mask_cov_with_dist(Sxx: torch.Tensor, distMat: torch.Tensor | None, off
     S_mask = Sxx * M.unsqueeze(0)
     return S_mask - torch.diag_embed(torch.diagonal(S_mask, dim1=-2, dim2=-1)) + torch.diag_embed(diag)
 
+# def _smf_fit_linear_KR(Z: torch.Tensor,
+#                        X: torch.Tensor,
+#                        distMat: torch.Tensor | None = None,
+#                        offdiag_rad: float | None = None,
+#                        jitter: float = 1e-6):
+#     """
+#     Batched linear triangular KR map for joint [Z, X].
+#     Returns parameters for S^X(z,x) = L^{-1}_{x|z} ( x - μ_{x|z} ).
+#     """
+#     B, N, m = Z.shape
+#     d = X.shape[2]
+#     device, dtype = X.device, X.dtype
+
+#     mu_z = Z.mean(1)  # (B,m)
+#     mu_x = X.mean(1)  # (B,d)
+#     Zc = Z - mu_z.unsqueeze(1)
+#     Xc = X - mu_x.unsqueeze(1)
+
+#     Szz = (Zc.transpose(1,2) @ Zc) / max(1, N - 1)
+#     Sxz = (Xc.transpose(1,2) @ Zc) / max(1, N - 1)     # (B,d,m)
+#     Sxx = (Xc.transpose(1,2) @ Xc) / max(1, N - 1)     # (B,d,d)
+
+#     # localization (optional)
+#     Sxx = _smf_mask_cov_with_dist(Sxx, distMat, offdiag_rad)
+
+#     eye_m = torch.eye(Z.shape[-1], device=device, dtype=dtype).unsqueeze(0)
+#     eye_d = torch.eye(d, device=device, dtype=dtype).unsqueeze(0)
+#     Szz = Szz + jitter * eye_m
+#     Sxx = Sxx + jitter * eye_d
+
+#     Szz_inv = torch.linalg.inv(Szz)
+#     # Σ_{x|z} = Sxx - Sxz Szz^{-1} Sxz^T
+#     Sx_given_z = Sxx - Sxz @ (Szz_inv @ Sxz.transpose(1,2))
+#     L = torch.linalg.cholesky(Sx_given_z)              # (B,d,d)
+#     return mu_z, mu_x, Szz_inv, Sxz, L
 def _smf_fit_linear_KR(Z: torch.Tensor,
                        X: torch.Tensor,
                        distMat: torch.Tensor | None = None,
@@ -319,81 +354,167 @@ def _smf_fit_linear_KR(Z: torch.Tensor,
                        jitter: float = 1e-6):
     """
     Batched linear triangular KR map for joint [Z, X].
-    Returns parameters for S^X(z,x) = L^{-1}_{x|z} ( x - μ_{x|z} ).
+    Returns parameters for S^X(z,x) = L^{-1}_{x|z} ( x - μ_{x|z} ),
+    but exposes A = Σ_{z z}^{-1} Σ_{z x} instead of Σ_{z z}^{-1} / Σ_{x z}.
     """
     B, N, m = Z.shape
     d = X.shape[2]
     device, dtype = X.device, X.dtype
 
-    mu_z = Z.mean(1)  # (B,m)
-    mu_x = X.mean(1)  # (B,d)
+    mu_z = Z.mean(1)                     # (B,m)
+    mu_x = X.mean(1)                     # (B,d)
     Zc = Z - mu_z.unsqueeze(1)
     Xc = X - mu_x.unsqueeze(1)
 
-    Szz = (Zc.transpose(1,2) @ Zc) / max(1, N - 1)
-    Sxz = (Xc.transpose(1,2) @ Zc) / max(1, N - 1)     # (B,d,m)
-    Sxx = (Xc.transpose(1,2) @ Xc) / max(1, N - 1)     # (B,d,d)
+    Szz = (Zc.transpose(1,2) @ Zc) / max(1, N - 1)        # (B,m,m)
+    Sxz = (Xc.transpose(1,2) @ Zc) / max(1, N - 1)        # (B,d,m)
+    Sxx = (Xc.transpose(1,2) @ Xc) / max(1, N - 1)        # (B,d,d)
 
-    # localization (optional)
+    # Optional covariance masking on Sxx (leave as-is for now)
     Sxx = _smf_mask_cov_with_dist(Sxx, distMat, offdiag_rad)
 
-    eye_m = torch.eye(Z.shape[-1], device=device, dtype=dtype).unsqueeze(0)
+    # Scaled jitter (safer than constant), but you can keep your jitter if you prefer
+    eye_m = torch.eye(m, device=device, dtype=dtype).unsqueeze(0)
     eye_d = torch.eye(d, device=device, dtype=dtype).unsqueeze(0)
     Szz = Szz + jitter * eye_m
     Sxx = Sxx + jitter * eye_d
 
-    Szz_inv = torch.linalg.inv(Szz)
-    # Σ_{x|z} = Sxx - Sxz Szz^{-1} Sxz^T
-    Sx_given_z = Sxx - Sxz @ (Szz_inv @ Sxz.transpose(1,2))
-    L = torch.linalg.cholesky(Sx_given_z)              # (B,d,d)
-    return mu_z, mu_x, Szz_inv, Sxz, L
+    # Compute A = Σ_{zz}^{-1} Σ_{zx}  via two triangular solves (no explicit inverse)
+    # First, Cholesky of Szz
+    Lz = torch.linalg.cholesky(Szz)                          # (B,m,m)
+    # Solve Lz * T = Sxz^T  -> T = Lz^{-1} Sxz^T
+    T  = torch.linalg.solve_triangular(Lz, Sxz.transpose(1,2), upper=False)   # (B,m,d)
+    # Solve Lz^T * A = T   -> A = (Lz^T)^{-1} T
+    A  = torch.linalg.solve_triangular(Lz.transpose(1,2), T, upper=True)      # (B,m,d)
 
-def _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z, x):
+    # Schur complement: Σ_{x|z} = Sxx - Sxz * A
+    Sx_given_z = Sxx - Sxz @ A                                                # (B,d,d)
+    L = torch.linalg.cholesky(Sx_given_z)                                     # (B,d,d)
+
+    return mu_z, mu_x, A, L
+
+
+# def _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z, x):
+#     """
+#     u = L^{-1} ( x - μ_{x|z} ), batched over B.
+#     z: (B,N,m) or (B,m); x: (B,N,K) -> u: (B,N,K)
+#     """
+#     # Ensure z has (B,N,m)
+#     if z.dim() == 2:
+#         z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)  # (B,N,m)
+
+#     # zc: (B,N,m)
+#     zc = z - mu_z.unsqueeze(1)
+
+#     # A := Szz_inv @ Sxz^T  -> (B, m, K)
+#     # (Sxz is (B,K,m) so Sxz.transpose(1,2) is (B,m,K))
+#     A = Szz_inv @ Sxz.transpose(1, 2)  # (B,m,K)
+
+#     # μ_{x|z} = μ_x + (z - μ_z) @ A  -> (B, N, K)
+#     mu_x_given_z = mu_x.unsqueeze(1) + zc @ A  # (B,N,m) @ (B,m,K) -> (B,N,K)
+
+#     # u = L^{-1} (x - μ_{x|z})
+#     y = (x - mu_x_given_z).transpose(1, 2)              # (B,K,N)
+#     # u = torch.cholesky_solve(y, L).transpose(1, 2)      # (B,N,K)
+#     u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
+#     return u
+
+def _smf_forward_linear_KR(mu_z, mu_x, A, L, z, x):
     """
     u = L^{-1} ( x - μ_{x|z} ), batched over B.
-    z: (B,N,m) or (B,m); x: (B,N,K) -> u: (B,N,K)
+    z: (B,N,m) or (B,m); x: (B,N,d) -> u: (B,N,d)
     """
     # Ensure z has (B,N,m)
     if z.dim() == 2:
         z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)  # (B,N,m)
 
-    # zc: (B,N,m)
-    zc = z - mu_z.unsqueeze(1)
+    zc = z - mu_z.unsqueeze(1)                                 # (B,N,m)
+    mu_x_given_z = mu_x.unsqueeze(1) + zc @ A                  # (B,N,d)
 
-    # A := Szz_inv @ Sxz^T  -> (B, m, K)
-    # (Sxz is (B,K,m) so Sxz.transpose(1,2) is (B,m,K))
-    A = Szz_inv @ Sxz.transpose(1, 2)  # (B,m,K)
-
-    # μ_{x|z} = μ_x + (z - μ_z) @ A  -> (B, N, K)
-    mu_x_given_z = mu_x.unsqueeze(1) + zc @ A  # (B,N,m) @ (B,m,K) -> (B,N,K)
-
-    # u = L^{-1} (x - μ_{x|z})
-    y = (x - mu_x_given_z).transpose(1, 2)              # (B,K,N)
-    u = torch.cholesky_solve(y, L).transpose(1, 2)      # (B,N,K)
+    y = (x - mu_x_given_z).transpose(1, 2)                     # (B,d,N)
     u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
     return u
 
 
-def _smf_inverse_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z_star, u):
+
+# def _smf_inverse_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z_star, u):
+#     """
+#     x = μ_{x|z*} + L u, batched.
+#     z_star: (B,m) or (B,N,m); u: (B,N,K) -> x: (B,N,K)
+#     """
+#     # Ensure z_star has (B,N,m)
+#     if z_star.dim() == 2:
+#         z_star = z_star.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
+
+#     zc = z_star - mu_z.unsqueeze(1)  # (B,N,m)
+
+#     # A := Szz_inv @ Sxz^T  -> (B, m, K)
+#     A = Szz_inv @ Sxz.transpose(1, 2)  # (B,m,K)
+
+#     # μ_{x|z*} = μ_x + (z* - μ_z) @ A  -> (B,N,K)
+#     mu_x_given_zstar = mu_x.unsqueeze(1) + zc @ A
+
+#     # x = μ_{x|z*} + L u
+#     return mu_x_given_zstar + (u @ L.transpose(1, 2))
+
+def _smf_inverse_linear_KR(mu_z, mu_x, A, L, z_star, u):
     """
     x = μ_{x|z*} + L u, batched.
-    z_star: (B,m) or (B,N,m); u: (B,N,K) -> x: (B,N,K)
+    z_star: (B,m) or (B,N,m); u: (B,N,d) -> x: (B,N,d)
     """
-    # Ensure z_star has (B,N,m)
     if z_star.dim() == 2:
-        z_star = z_star.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
+        z_star = z_star.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)  # (B,N,m)
 
-    zc = z_star - mu_z.unsqueeze(1)  # (B,N,m)
-
-    # A := Szz_inv @ Sxz^T  -> (B, m, K)
-    A = Szz_inv @ Sxz.transpose(1, 2)  # (B,m,K)
-
-    # μ_{x|z*} = μ_x + (z* - μ_z) @ A  -> (B,N,K)
-    mu_x_given_zstar = mu_x.unsqueeze(1) + zc @ A
-
-    # x = μ_{x|z*} + L u
+    zc = z_star - mu_z.unsqueeze(1)                         # (B,N,m)
+    mu_x_given_zstar = mu_x.unsqueeze(1) + zc @ A           # (B,N,d)
     return mu_x_given_zstar + (u @ L.transpose(1, 2))
 
+
+# class SMFLinearKR:
+#     """
+#     Transport map container for the SMF linear KR map.
+#     Holds parameters and exposes forward/inverse like a 'transform'.
+#     Shapes are batched by B.
+#     """
+#     def __init__(self, mu_z, mu_x, Szz_inv, Sxz, L, nonId_radius=None, meta=None):
+#         self.kind = "smf_linear_kr"
+#         self.mu_z = mu_z              # (B, m)
+#         self.mu_x = mu_x              # (B, K)
+#         self.Szz_inv = Szz_inv        # (B, m, m)
+#         self.Sxz = Sxz                # (B, K, m)
+#         self.L = L                    # (B, K, K)
+#         self.nonId_radius = nonId_radius
+#         self.meta = {} if meta is None else meta
+
+#     @torch.no_grad()
+#     def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+#         """
+#         u = S^X(z,x) = L^{-1} (x - μ_{x|z})
+#         z: (B, m) or (B, N, m); x: (B, N, K) -> u: (B, N, K)
+#         """
+#         mu_z, mu_x, Szz_inv, Sxz, L = self.mu_z, self.mu_x, self.Szz_inv, self.Sxz, self.L
+#         if z.dim() == 2:
+#             z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)  # (B,N,m)
+#         zc = z - mu_z.unsqueeze(1)
+#         # μ_{x|z} = μ_x + Sxz Szz^{-1} (z - μ_z)
+#         mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
+#         y = (x - mu_x_given_z).transpose(1,2)                # (B,K,N)
+#         # u = torch.cholesky_solve(y, L).transpose(1,2)        # (B,N,K)
+#         u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
+#         return u
+
+#     @torch.no_grad()
+#     def inverse(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+#         """
+#         x = (S^X(z,·))^{-1}(u) = μ_{x|z} + L u
+#         z: (B, m) or (B, N, m); u: (B, N, K) -> x: (B, N, K)
+#         """
+#         mu_z, mu_x, Szz_inv, Sxz, L = self.mu_z, self.mu_x, self.Szz_inv, self.Sxz, self.L
+#         if z.dim() == 2:
+#             z = z.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
+#         zc = z - mu_z.unsqueeze(1)
+#         mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
+#         return mu_x_given_z + (u @ L.transpose(1,2))
 
 class SMFLinearKR:
     """
@@ -401,13 +522,12 @@ class SMFLinearKR:
     Holds parameters and exposes forward/inverse like a 'transform'.
     Shapes are batched by B.
     """
-    def __init__(self, mu_z, mu_x, Szz_inv, Sxz, L, nonId_radius=None, meta=None):
+    def __init__(self, mu_z, mu_x, A, L, nonId_radius=None, meta=None):
         self.kind = "smf_linear_kr"
         self.mu_z = mu_z              # (B, m)
-        self.mu_x = mu_x              # (B, K)
-        self.Szz_inv = Szz_inv        # (B, m, m)
-        self.Sxz = Sxz                # (B, K, m)
-        self.L = L                    # (B, K, K)
+        self.mu_x = mu_x              # (B, d)
+        self.A = A                    # (B, m, d)
+        self.L = L                    # (B, d, d)
         self.nonId_radius = nonId_radius
         self.meta = {} if meta is None else meta
 
@@ -415,16 +535,14 @@ class SMFLinearKR:
     def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
         u = S^X(z,x) = L^{-1} (x - μ_{x|z})
-        z: (B, m) or (B, N, m); x: (B, N, K) -> u: (B, N, K)
+        z: (B, m) or (B, N, m); x: (B, N, d) -> u: (B, N, d)
         """
-        mu_z, mu_x, Szz_inv, Sxz, L = self.mu_z, self.mu_x, self.Szz_inv, self.Sxz, self.L
+        mu_z, mu_x, A, L = self.mu_z, self.mu_x, self.A, self.L
         if z.dim() == 2:
             z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)  # (B,N,m)
         zc = z - mu_z.unsqueeze(1)
-        # μ_{x|z} = μ_x + Sxz Szz^{-1} (z - μ_z)
-        mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
-        y = (x - mu_x_given_z).transpose(1,2)                # (B,K,N)
-        u = torch.cholesky_solve(y, L).transpose(1,2)        # (B,N,K)
+        mu_x_given_z = mu_x.unsqueeze(1) + zc @ A
+        y = (x - mu_x_given_z).transpose(1,2)                # (B,d,N)
         u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
         return u
 
@@ -432,13 +550,13 @@ class SMFLinearKR:
     def inverse(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
         """
         x = (S^X(z,·))^{-1}(u) = μ_{x|z} + L u
-        z: (B, m) or (B, N, m); u: (B, N, K) -> x: (B, N, K)
+        z: (B, m) or (B, N, m); u: (B, N, d) -> x: (B, N, d)
         """
-        mu_z, mu_x, Szz_inv, Sxz, L = self.mu_z, self.mu_x, self.Szz_inv, self.Sxz, self.L
+        mu_z, mu_x, A, L = self.mu_z, self.mu_x, self.A, self.L
         if z.dim() == 2:
             z = z.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
         zc = z - mu_z.unsqueeze(1)
-        mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
+        mu_x_given_z = mu_x.unsqueeze(1) + zc @ A
         return mu_x_given_z + (u @ L.transpose(1,2))
 
 
@@ -473,28 +591,46 @@ def stochastic_map_filter_analysis(
         X = mean + (1.0 + float(rho)) * (X - mean)
 
     # 2) synthetic observations Z ~ p(z|x); Gaussian noise with std sigma_y
-    Yf = _smf_apply_H(X, observation_operator)                         # (B,N,m)
+    Yf = _smf_apply_H(X, observation_operator)   
+    m = Yf.shape[-1]
+
+    if not hasattr(stochastic_map_filter_analysis, "_printed_shape_info"):
+        stochastic_map_filter_analysis._printed_shape_info = True
+        print(f"[SMF] shapes: B={B}, N={N}, d={d}, m={m},  N/m={N/m:.1f}, N/d={N/d:.1f}")
+        if m == d:
+            print("[SMF] Full observation detected (m == d).")
+        # Optional: gentle warning if N is small for given m
+        if N / m < 20:
+            print(f"[SMF][warn] N/m={N/m:.1f} is small; linear KR covariances may be noisy without localization.") 
     if isinstance(sigma_y, torch.Tensor):
         sig = sigma_y.to(device=device, dtype=dtype)
         sig = sig.view(B, 1, -1) if sig.ndim > 0 else sig.view(1,1,1)
     else:
         sig = torch.as_tensor(sigma_y, device=device, dtype=dtype).view(1,1,1)
-    Zs = Yf + torch.randn_like(Yf) * sig                                # (B,N,m)
+    Zs = Yf + torch.randn_like(Yf) * sig  **2                              # (B,N,m)
 
     # 3) map scope (nonId_radius)
     K = d if (nonId_radius is None) else int(nonId_radius)
     K = max(0, min(d, K))
-
     # 4) fit linear KR on first K dims; 5) push through inverse at y*
     if K > 0:
-        mu_z, mu_x, Szz_inv, Sxz, L = _smf_fit_linear_KR(
+        # mu_z, mu_x, Szz_inv, Sxz, L = _smf_fit_linear_KR(
+        #     Zs, X[:, :, :K],
+        #     distMat=(None if distMat is None else distMat[:K, :K]),
+        #     offdiag_rad=offdiag_rad, jitter=jitter
+        # )
+        # y_star = observation_y if observation_y.ndim == 2 else observation_y.unsqueeze(0).expand(B, -1)
+        mu_z, mu_x, A, L = _smf_fit_linear_KR(
             Zs, X[:, :, :K],
             distMat=(None if distMat is None else distMat[:K, :K]),
             offdiag_rad=offdiag_rad, jitter=jitter
         )
         y_star = observation_y if observation_y.ndim == 2 else observation_y.unsqueeze(0).expand(B, -1)
-        U = _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, Zs, X[:, :, :K])
-        X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, y_star, U)
+        
+        # U = _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, Zs, X[:, :, :K])
+        # X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, y_star, U)
+        U = _smf_forward_linear_KR(mu_z, mu_x, A, L, Zs, X[:, :, :K])
+        X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, A, L, y_star, U)
     else:
         X_firstK = X[:, :, :0]
 
@@ -504,7 +640,7 @@ def stochastic_map_filter_analysis(
     # 6) order_all: keep linear (1). Lifting to higher order can be added later.
     if K > 0:
         smf_map = SMFLinearKR(
-            mu_z=mu_z, mu_x=mu_x, Szz_inv=Szz_inv, Sxz=Sxz, L=L,
+            mu_z=mu_z, mu_x=mu_x, A=A, L=L,
             nonId_radius=K,
             meta={
                 "distMat_used": offdiag_rad is not None,
@@ -514,13 +650,16 @@ def stochastic_map_filter_analysis(
             },
         )
     else:
-        # identity map placeholder (no transformed dims)
+        B, m = X.shape[0], Yf.shape[-1]
+        device, dtype = X.device, X.dtype
+
         smf_map = SMFLinearKR(
-            mu_z=torch.zeros_like(Yf.mean(1)),
-            mu_x=torch.zeros(X.shape[0], 0, device=X.device, dtype=X.dtype),
-            Szz_inv=torch.eye(Yf.shape[-1], device=X.device, dtype=X.dtype).unsqueeze(0),
-            Sxz=torch.zeros(X.shape[0], 0, Yf.shape[-1], device=X.device, dtype=X.dtype),
-            L=torch.eye(0, device=X.device, dtype=X.dtype).unsqueeze(0),
+            mu_z=torch.zeros(B, m, device=device, dtype=dtype),          # (B,m)
+            mu_x=torch.zeros(B, 0, device=device, dtype=dtype),          # (B,0)
+            A=torch.zeros(B, m, 0, device=device, dtype=dtype),          # (B,m,0)
+            L=torch.eye(0, device=device, dtype=dtype).unsqueeze(0)      # (1,0,0)
+            .expand(B, 0, 0)
+            .contiguous(),
             nonId_radius=0,
             meta={"identity": True}
         )
