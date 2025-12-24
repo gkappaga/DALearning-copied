@@ -1392,6 +1392,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                         offdiag_rad=getattr(args, 'smf_offdiag_rad', None),
                         rho=getattr(args, 'smf_rho', 0.0),
                         jitter=getattr(args, 'smf_jitter', 1e-6),
+                        p_rbf=getattr(args, 'smf_p_rbf', 0)
                     )
 
                     # Backward compatibility: handle both 1-return and 2-return versions

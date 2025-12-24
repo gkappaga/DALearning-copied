@@ -312,6 +312,211 @@ def _smf_mask_cov_with_dist(Sxx: torch.Tensor, distMat: torch.Tensor | None, off
     S_mask = Sxx * M.unsqueeze(0)
     return S_mask - torch.diag_embed(torch.diagonal(S_mask, dim1=-2, dim2=-1)) + torch.diag_embed(diag)
 
+# -------------------- RBF helpers --------------------
+def _choose_centers_scales(vals: torch.Tensor, p: int):
+    """
+    vals: (B,N) centered scalar samples for one input (per batch).
+    Returns (centers, scales) with shapes (B,p), (B,p). If p==0 → (None,None).
+    """
+    if p == 0:
+        return None, None
+    # simple per-batch quantiles for centers; robust scale from std
+    if p == 1:
+        qlist = [0.5]
+    elif p == 2:
+        qlist = [0.33, 0.67]
+    else:
+        raise ValueError("Only p in {0,1,2} supported.")
+    centers = torch.stack([vals.quantile(q, dim=1) for q in qlist], dim=-1)  # (B,p)
+    scales = vals.std(dim=1, unbiased=True).clamp_min(1e-6)                  # (B,)
+    scales = torch.stack([scales for _ in range(len(qlist))], dim=-1)        # (B,p)
+    return centers, scales
+
+def _rbf_features(x: torch.Tensor, centers: torch.Tensor, scales: torch.Tensor):
+    """
+    x: (B,N) centered scalar; centers/scales: (B,p).
+    Returns Φ_rbf: (B,N,p) with exp(-0.5 * ((x-c)/s)^2).
+    """
+    B, N = x.shape
+    p = centers.shape[-1]
+    xc = x.unsqueeze(-1) - centers.unsqueeze(1)        # (B,N,p)
+    s  = scales.unsqueeze(1).clamp_min(1e-6)           # (B,1,p)
+    z  = xc / s
+    return torch.exp(-0.5 * z * z)                     # (B,N,p)
+
+
+# -------------------- Separable map params & predictor --------------------
+class SeparableLinRBFParams:
+    """
+    Holds per-component coefficients and per-input RBF centers/scales.
+    betas[k] is a dict: {'y': β0 or None, 'i': {i: β_i}} with β blocks sized (1+p_rbf).
+    """
+    def __init__(self, betas, centers, scales, include_y: bool, p_rbf: int):
+        self.betas = betas
+        self.centers = centers   # {'y': (B,p) or None, 'i': {i: (B,p) or None}}
+        self.scales  = scales    # same keys as centers
+        self.include_y = include_y
+        self.p_rbf = p_rbf
+
+def _predict_mu_x_given_z_separable(Zc: torch.Tensor, mu_x: torch.Tensor, params: SeparableLinRBFParams):
+    """
+    Zc: (B,N,m) centered obs; mu_x: (B,d); returns μ̂_x|z (B,N,d).
+    """
+    B, N, m = Zc.shape
+    d = mu_x.shape[-1]
+    device, dt = Zc.device, Zc.dtype
+    Xhat = torch.zeros(B, N, d, device=device, dtype=dt)
+
+    for k in range(d):
+        used = list(range(min(k+1, m)))
+        cols = []
+        βk = params.betas[k]
+
+        # optional u0^k(y): here we use z_0 as the "y" data term (same as paper’s separable form)
+        if params.include_y and m > 0 and (βk['y'] is not None):
+            y = Zc[..., 0]  # (B,N)
+            blocks = [y.unsqueeze(-1)]  # linear term
+            if params.p_rbf > 0:
+                blocks.append(_rbf_features(y, params.centers['y'], params.scales['y']))
+            Φy = torch.cat(blocks, dim=-1)   # (B,N,1+p)
+            cols.append(Φy @ βk['y'].unsqueeze(-1))  # (B,N,1)
+
+        # sum_i u_i^k(z_i), i ≤ k
+        for i in used:
+            zi = Zc[..., i]
+            blocks = [zi.unsqueeze(-1)]
+            if params.p_rbf > 0:
+                blocks.append(_rbf_features(zi, params.centers['i'][i], params.scales['i'][i]))
+            Φi = torch.cat(blocks, dim=-1)  # (B,N,1+p)
+            cols.append(Φi @ βk['i'][i].unsqueeze(-1))  # (B,N,1)
+
+        Xhat[..., k:k+1] = sum(cols) if cols else 0.0
+
+    return Xhat + mu_x.unsqueeze(1)
+
+
+# -------------------- Fit separable linear + RBF map --------------------
+def _smf_fit_separable_linear_rbf(
+    Z: torch.Tensor,   # (B,N,m) synthetic obs (NOT centered)
+    X: torch.Tensor,   # (B,N,d) state (NOT centered)
+    p_rbf: int,        # 1 or 2
+    include_y: bool = False
+):
+    """
+    Paper-faithful separable fit with p RBFs (p in {1,2}).
+    For each k: x_k <- u0^k(y) + sum_{i<=k} u_i^k(z_i), where each u is linear on [t, RBFs(t)].
+    Returns (mu_z, mu_x, params, L).
+    """
+    assert p_rbf in (1, 2), "p_rbf must be 1 or 2 for RBF mode."
+    B, N, m = Z.shape
+    d = X.shape[-1]
+    device, dt = X.device, X.dtype
+
+    # means & centered
+    mu_z = Z.mean(1)                 # (B,m)
+    mu_x = X.mean(1)                 # (B,d)
+    Zc = Z - mu_z.unsqueeze(1)       # (B,N,m)
+    Xc = X - mu_x.unsqueeze(1)       # (B,N,d)
+
+    # precompute centers/scales for each scalar input we may use (per-batch)
+    centers = {'y': None, 'i': {}}
+    scales  = {'y': None, 'i': {}}
+    if include_y and m > 0:
+        cy, sy = _choose_centers_scales(Zc[..., 0], p_rbf)
+        centers['y'], scales['y'] = cy, sy
+    for i in range(m):
+        ci, si = _choose_centers_scales(Zc[..., i], p_rbf)
+        centers['i'][i] = ci
+        scales['i'][i]  = si
+
+    betas = []
+    # predict to form residual covariance later
+    Xhat = torch.zeros(B, N, d, device=device, dtype=dt)
+
+    for k in range(d):
+        used = list(range(min(k+1, m)))
+        blocks = []
+        # u0^k(y)
+        if include_y and m > 0:
+            y = Zc[..., 0]  # (B,N)
+            b = [y.unsqueeze(-1)]  # linear term
+            b.append(_rbf_features(y, centers['y'], scales['y']))  # (B,N,p)
+            Φy = torch.cat(b, dim=-1)  # (B,N,1+p)
+            blocks.append(Φy)
+        # sum_i u_i^k(z_i)
+        for i in used:
+            zi = Zc[..., i]
+            b = [zi.unsqueeze(-1)]
+            b.append(_rbf_features(zi, centers['i'][i], scales['i'][i]))  # (B,N,p)
+            Φi = torch.cat(b, dim=-1)  # (B,N,1+p)
+            blocks.append(Φi)
+
+        # Concatenate features horizontally
+        Φk = torch.cat(blocks, dim=-1) if blocks else torch.zeros(B, N, 0, device=device, dtype=dt)  # (B,N,q_k)
+        xk = Xc[..., k:k+1]  # (B,N,1)
+
+        βk = torch.linalg.lstsq(Φk, xk).solution  # (B,q_k,1)
+
+        # Split βk back into blocks
+        βrec = {'y': None, 'i': {}}
+        offs = 0
+        q_block = 1 + p_rbf
+        if include_y and m > 0:
+            βrec['y'] = βk[:, offs:offs+q_block, :].squeeze(-1)  # (B,1+p)
+            offs += q_block
+        for i in used:
+            βrec['i'][i] = βk[:, offs:offs+q_block, :].squeeze(-1)  # (B,1+p)
+            offs += q_block
+        betas.append(βrec)
+
+        # Predict x̂_k and store
+        Xhat[..., k:k+1] = Φk @ βk
+
+    # residual covariance and Cholesky
+    R = Xc - Xhat
+    Sx_given_z = (R.transpose(1,2) @ R) / max(1, N-1)
+    Sx_given_z = 0.5 * (Sx_given_z + Sx_given_z.transpose(1,2))
+    L = torch.linalg.cholesky(Sx_given_z)
+
+    params = SeparableLinRBFParams(betas, centers, scales, include_y=include_y, p_rbf=p_rbf)
+    return mu_z, mu_x, params, L
+
+# -------------------- Separable KR map (RBF) --------------------
+class SMFSeparableKR:
+    """
+    Separable/triangular map with linear+RBF component functions.
+    forward: u = L^{-1}(x - μ̂_x|z)
+    inverse: x = μ̂_x|z* + L u
+    """
+    def __init__(self, mu_z, mu_x, params: SeparableLinRBFParams, L, nonId_radius=None, meta=None):
+        self.kind = "smf_separable_rbf"
+        self.mu_z = mu_z          # (B,m)
+        self.mu_x = mu_x          # (B,d)
+        self.params = params
+        self.L = L                # (B,d,d)
+        self.nonId_radius = nonId_radius
+        self.meta = {} if meta is None else meta
+
+    @torch.no_grad()
+    def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        # ensure z has shape (B,N,m)
+        if z.dim() == 2:
+            z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)
+        zc = z - self.mu_z.unsqueeze(1)
+        mu_x_given_z = _predict_mu_x_given_z_separable(zc, self.mu_x, self.params)  # (B,N,d)
+        y = (x - mu_x_given_z).transpose(1,2)                                       # (B,d,N)
+        u = torch.linalg.solve_triangular(self.L, y, upper=False).transpose(1,2)
+        return u
+
+    @torch.no_grad()
+    def inverse(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        if z.dim() == 2:
+            z = z.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
+        zc = z - self.mu_z.unsqueeze(1)
+        mu_x_given_z = _predict_mu_x_given_z_separable(zc, self.mu_x, self.params)
+        return mu_x_given_z + (u @ self.L.transpose(1,2))
+
+
 # def _smf_fit_linear_KR(Z: torch.Tensor,
 #                        X: torch.Tensor,
 #                        distMat: torch.Tensor | None = None,
@@ -392,6 +597,8 @@ def _smf_fit_linear_KR(Z: torch.Tensor,
     L = torch.linalg.cholesky(Sx_given_z)                                     # (B,d,d)
 
     return mu_z, mu_x, A, L
+
+
 
 
 # def _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z, x):
@@ -575,6 +782,8 @@ def stochastic_map_filter_analysis(
     offdiag_rad: float | None = None,      # localization radius for state-state cov
     rho: float = 0.0,                      # ensemble inflation on forecast
     jitter: float = 1e-6,                  # numerical jitter
+    p_rbf: int = 0,                 # NEW: 0 = linear, 1 or 2 = linear+RBFs
+    include_y_in_bias: bool = False # NEW: include u0^k(y) term
 ):
     """
     One SMF analysis step (no particle resampling). Mirrors
@@ -607,30 +816,50 @@ def stochastic_map_filter_analysis(
         sig = sig.view(B, 1, -1) if sig.ndim > 0 else sig.view(1,1,1)
     else:
         sig = torch.as_tensor(sigma_y, device=device, dtype=dtype).view(1,1,1)
-    Zs = Yf + torch.randn_like(Yf) * sig  **2                              # (B,N,m)
+    Zs = Yf + torch.randn_like(Yf) * sig                              # (B,N,m)
 
     # 3) map scope (nonId_radius)
     K = d if (nonId_radius is None) else int(nonId_radius)
     K = max(0, min(d, K))
     # 4) fit linear KR on first K dims; 5) push through inverse at y*
     if K > 0:
-        # mu_z, mu_x, Szz_inv, Sxz, L = _smf_fit_linear_KR(
-        #     Zs, X[:, :, :K],
-        #     distMat=(None if distMat is None else distMat[:K, :K]),
-        #     offdiag_rad=offdiag_rad, jitter=jitter
-        # )
-        # y_star = observation_y if observation_y.ndim == 2 else observation_y.unsqueeze(0).expand(B, -1)
-        mu_z, mu_x, A, L = _smf_fit_linear_KR(
-            Zs, X[:, :, :K],
-            distMat=(None if distMat is None else distMat[:K, :K]),
-            offdiag_rad=offdiag_rad, jitter=jitter
-        )
         y_star = observation_y if observation_y.ndim == 2 else observation_y.unsqueeze(0).expand(B, -1)
-        
-        # U = _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, Zs, X[:, :, :K])
-        # X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, y_star, U)
-        U = _smf_forward_linear_KR(mu_z, mu_x, A, L, Zs, X[:, :, :K])
-        X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, A, L, y_star, U)
+
+        if p_rbf == 0:
+            # --- linear KR path (your existing code) ---
+            mu_z, mu_x, A, L = _smf_fit_linear_KR(
+                Zs, X[:, :, :K],
+                distMat=(None if distMat is None else distMat[:K, :K]),
+                offdiag_rad=offdiag_rad, jitter=jitter
+            )
+            U = _smf_forward_linear_KR(mu_z, mu_x, A, L, Zs, X[:, :, :K])
+            X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, A, L, y_star, U)
+            smf_map = SMFLinearKR(mu_z=mu_z, mu_x=mu_x, A=A, L=L, nonId_radius=K,
+                                meta={"p_rbf": 0, "order_all": order_all, "rho": rho})
+
+        else:
+            # --- separable linear + RBF path (paper’s “linear + p RBFs”) ---
+            mu_z, mu_x, params, L = _smf_fit_separable_linear_rbf(
+                Zs, X[:, :, :K], p_rbf=p_rbf, include_y=include_y_in_bias
+            )
+            # forward/inverse use the separable predictor internally
+            # we still need U only if you log/inspect; inverse is what gives the analysis ensemble
+            # build U with the same logic as linear but with the separable predictor:
+            # (recompute μ̂_x|z for the forecast)
+            Zc_fore = Zs - mu_z.unsqueeze(1)
+            mu_x_given_z_fore = _predict_mu_x_given_z_separable(Zc_fore, mu_x, params)
+            Y = (X[:, :, :K] - mu_x_given_z_fore).transpose(1,2)    # (B,K,N)
+            U = torch.linalg.solve_triangular(L, Y, upper=False).transpose(1,2)
+
+            # now inverse at y*
+            # make z* shape compatible
+            z_star = y_star if y_star.dim() == 2 else y_star
+            zc_star = z_star.unsqueeze(1).expand(U.shape[0], U.shape[1], -1) - mu_z.unsqueeze(1)
+            mu_x_given_z_star = _predict_mu_x_given_z_separable(zc_star, mu_x, params)
+            X_firstK = mu_x_given_z_star + (U @ L.transpose(1,2))
+
+            smf_map = SMFSeparableKR(mu_z=mu_z, mu_x=mu_x, params=params, L=L, nonId_radius=K,
+                                    meta={"p_rbf": p_rbf, "order_all": order_all, "rho": rho})
     else:
         X_firstK = X[:, :, :0]
 

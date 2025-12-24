@@ -165,6 +165,8 @@ def get_parameters():
         help='Forecast inflation factor inside SMF.')
     parser.add_argument('--smf_jitter', type=float, default=1e-6,
         help='Numerical jitter added to covariances in SMF.')
+    parser.add_argument('--smf_rbf_p', type=float, default=0,
+        help='RBF kernel power parameter for SMF localization (0=Gaussian).')
         
     # optimization setting
     parser.add_argument('--learning_rate', type=float_or_default, default='default',
