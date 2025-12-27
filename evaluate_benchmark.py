@@ -192,7 +192,7 @@ if __name__ == "__main__":
         # mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
         #     test_ClassicFilter(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, access_to_noise=True, infl=infl, loc_radius=loc_radius)
 
-        rmse = test_ClassicFilter_v2(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=infl, loc_radius=loc_radius)
+        rmse = test_ClassicFilter_v2(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=1.15, loc_radius=loc_radius)
         # print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         # print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         # print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")

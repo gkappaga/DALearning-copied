@@ -598,6 +598,74 @@ def _smf_fit_linear_KR(Z: torch.Tensor,
 
     return mu_z, mu_x, A, L
 
+def _chol_spd(C: torch.Tensor, max_tries: int = 8):
+    """
+    Robust batch Cholesky: symmetric, try cholesky_ex; if it fails,
+    add eps * mean(diag) I, with eps escalating 1e-12,1e-11,... until it works.
+    """
+    # Symmetrize first
+    C = C + C.transpose(-1, -2)
+    C.mul_(0.5)  # stays in C.dtype
+    L, info = torch.linalg.cholesky_ex(C)
+    if (info == 0).all():
+        return L
+
+    B, d, _ = C.shape
+    I = torch.eye(d, device=C.device, dtype=C.dtype).unsqueeze(0)
+    diag_mean = C.diagonal(dim1=-2, dim2=-1).abs().mean(dim=-1, keepdim=True).unsqueeze(-1)  # (B,1,1)
+    eps = 1e-12
+    C_work = C.clone()
+    for _ in range(max_tries):
+        bad = (info > 0)
+        if not bad.any():
+            break
+        C_work[bad] = C[bad] + eps * diag_mean[bad] * I[:1]
+        L, info = torch.linalg.cholesky_ex(0.5*(C_work + C_work.transpose(-1, -2)))
+        eps *= 10.0
+    # final assert—if it still fails, something else is wrong
+    if (info > 0).any():
+        raise RuntimeError("SMF: SPD repair failed after retries.")
+    return L
+
+
+def _smf_fit_linear_KR_perk(Z: torch.Tensor, X: torch.Tensor,
+                       distMat: torch.Tensor | None = None,
+                       offdiag_rad: float | None = None,
+                       jitter: float = 1e-6):
+    B, N, m = Z.shape
+    d = X.shape[-1]
+
+    mu_z = Z.mean(1)
+    mu_x = X.mean(1)
+    Zc = Z - mu_z.unsqueeze(1)
+    Xc = X - mu_x.unsqueeze(1)
+
+    A = torch.zeros(B, m, d, device=Z.device, dtype=Z.dtype)
+    Xhat = torch.zeros(B, N, d, device=Z.device, dtype=Z.dtype)
+
+    # (Optional) QR-based LS for better numerics
+    for k in range(d):
+        mk = min(k+1, m)
+        Zk = Zc[:, :, :mk]             # (B,N,mk)
+        xk = Xc[:, :, k:k+1]           # (B,N,1)
+
+        # batched QR: Zk = Q R  (Q orthonormal columns, R upper-triangular)
+        Q, R = torch.linalg.qr(Zk, mode='reduced')         # (B,N,mk), (B,mk,mk)
+        # beta = R^{-1} Q^T xk
+        rhs = torch.matmul(Q.transpose(1,2), xk)           # (B,mk,1)
+        beta = torch.linalg.solve_triangular(R, rhs, upper=True)  # (B,mk,1)
+
+        A[:, :mk, k] = beta.squeeze(-1)
+        Xhat[..., k:k+1] = Zk @ beta
+
+    # Residual covariance (exact for linear)
+    Rres = Xc - Xhat
+    Sx_given_z = (Rres.transpose(1,2) @ Rres) / max(1, N-1)
+    # Robust Cholesky (adds tiny trace-scaled jitter only if needed)
+    L = _chol_spd(Sx_given_z)
+
+    return mu_z, mu_x, A, L
+
 
 
 
@@ -816,7 +884,9 @@ def stochastic_map_filter_analysis(
         sig = sig.view(B, 1, -1) if sig.ndim > 0 else sig.view(1,1,1)
     else:
         sig = torch.as_tensor(sigma_y, device=device, dtype=dtype).view(1,1,1)
-    Zs = Yf + torch.randn_like(Yf) * sig                              # (B,N,m)
+    eps = torch.randn_like(Yf)
+    eps = eps - eps.mean(dim=1, keepdim=True)     # zero-mean across particles per (B,·,m)
+    Zs  = Yf + eps * sig                           # std, not variance
 
     # 3) map scope (nonId_radius)
     K = d if (nonId_radius is None) else int(nonId_radius)
@@ -827,13 +897,17 @@ def stochastic_map_filter_analysis(
 
         if p_rbf == 0:
             # --- linear KR path (your existing code) ---
-            mu_z, mu_x, A, L = _smf_fit_linear_KR(
+            mu_z, mu_x, A, L = _smf_fit_linear_KR_perk(
                 Zs, X[:, :, :K],
                 distMat=(None if distMat is None else distMat[:K, :K]),
                 offdiag_rad=offdiag_rad, jitter=jitter
             )
             U = _smf_forward_linear_KR(mu_z, mu_x, A, L, Zs, X[:, :, :K])
             X_firstK = _smf_inverse_linear_KR(mu_z, mu_x, A, L, y_star, U)
+            # with torch.no_grad():
+            #     U = _smf_forward_linear_KR(mu_z, mu_x, A, L, Zs, X[:, :, :K])
+            #     Xrec = _smf_inverse_linear_KR(mu_z, mu_x, A, L, Zs, U)   # <-- Zs again
+            #     print("round-trip max abs:", (Xrec - X[:, :, :K]).abs().max().item())
             smf_map = SMFLinearKR(mu_z=mu_z, mu_x=mu_x, A=A, L=L, nonId_radius=K,
                                 meta={"p_rbf": 0, "order_all": order_all, "rho": rho})
 

@@ -3,8 +3,8 @@ import torch
 DATASET_INFO = {
     'lorenz63': {
         'dim': 3,
-        'obs_dim': 1,
-        'obs_inds': torch.tensor([0]),
+        'obs_dim': 3,
+        'obs_inds': torch.tensor([0, 1, 2]),
         'dt': 0.15,
         'dt_iter': 5,
         'test_steps': 1500,
