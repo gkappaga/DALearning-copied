@@ -90,51 +90,54 @@ def run_once(
     test_traj_num: int = 64*16,
     test_batch_size: int = 64,
     use_dapper_for_enkf: bool = True,
-) -> Tuple[float, float]:
-    """
-    Returns (mean_rrmse, std_rrmse) for a single configuration.
-    """
+) -> tuple[float, float]:
+    # start from a fresh parse, then copy neutral defaults from base_args
     args = get_parameters()
-    # copy over some global defaults from base_args if you keep extra fields there
-    for k, v in vars(base_args).items():
-        setattr(args, k, v)
+    # for k, v in vars(base_args).items():
+    #     setattr(args, k, v)
 
+    # common config
     args.test_only = True
     args.v = method
     args.N = N
-    args.dataset = dataset
     args.cp_load_path = 'no'
     args.seed = seed
     args.random_noise = True
     args.access_to_noise = False
     args.test_traj_num = test_traj_num
     args.test_batch_size = test_batch_size
+    args.dataset = 'lorenz63'
+    args.sigma_y = 2
 
-    # SMF-specific knobs (your analysis uses args.smf_rho, p_rbf, include_y_in_bias)
+    # SMF knobs (match your stochastic_map_filter_analysis signature)
     if method == 'SMF':
         args.smf_rho = float(rho)
-        args.p_rbf = int(p_rbf)
-        args.include_y_in_bias = getattr(args, 'include_y_in_bias', False)
+        args.smf_rbf_p = int(p_rbf)                 # <- name expected by your code
+        # args.include_y_in_bias = getattr(args, 'include_y_in_bias', False)
 
-    # Build loader + H
     if args.seed is not None and args.seed != "None":
         torch.manual_seed(int(args.seed))
+
+    # dataloader + H
     test_loader = get_dataloader(args, test_only=True)
+    print(args.ori_dim, args.obs_inds, args.device, 'here')
     H_info = partial_obs_operator(args.ori_dim, args.obs_inds, args.device)
 
-    # For EnKF, get best infl/loc from your CSV if available
+    # EnKF tuning from DAPPER CSV (if present)
     infl = 1.05
     loc_radius = None
-    if method == 'EnKF' and use_dapper_for_enkf:
-        args_enkf = get_parameters()
-        args_enkf.v = 'EnKF'
-        args_enkf.N = N
-        args_enkf.dataset = dataset
-        best = get_benchmarks(args_enkf)
-        if best != (None, None):
-            loc_radius, infl = best
+    # if method == 'EnKF' and use_dapper_for_enkf:
+    #     args_enkf = get_parameters()
+    #     args_enkf.v = 'EnKF'
+    #     args_enkf.N = N
+    #     # use whatever dataset this run is using
+    #     args_enkf.dataset = args.dataset
+    #     best = get_benchmarks(args_enkf)  # returns (loc_radius, infl) or (None, None)
+    #     if best != (None, None):
+    #         loc_radius, infl = best
 
-    # Run
+    # run and summarize
+    print(args.dataset)
     rrmse_tensor, _ = test_ClassicFilter_v2(
         test_loader,
         args,
@@ -145,7 +148,6 @@ def run_once(
         infl=infl,
         loc_radius=loc_radius
     )
-
     mean_rrmse = torch.nanmean(rrmse_tensor).item()
     std_rrmse = torch.nanstd(rrmse_tensor).item()
     return mean_rrmse, std_rrmse

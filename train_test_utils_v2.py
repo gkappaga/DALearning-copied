@@ -1119,7 +1119,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
         dict: A dictionary containing mean and standard deviation of evaluation metrics.
     """
     m = args.N
-    
+    print(args.dataset)
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
     elif args.dataset == "lorenz96":
