@@ -13,7 +13,7 @@ from train_test_utils_v2 import test_ClassicFilter_v2
 
 
 # ------------------------------------------------------------
-# Small helpers for safe/resumable caching
+# Small helpers for safe/resumable caching (unchanged)
 # ------------------------------------------------------------
 def _ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
@@ -38,7 +38,7 @@ def _load_cache(path: str):
 
 
 # ------------------------------------------------------------
-# Optional: your helper that reads DAPPER benchmarks (you pasted earlier)
+# Optional: your helper that reads DAPPER benchmarks (unchanged)
 # ------------------------------------------------------------
 def get_benchmarks(args):
     """
@@ -75,7 +75,7 @@ def get_benchmarks(args):
 
 
 # ------------------------------------------------------------
-# Single run helper
+# Single run helper (now sources dataset/sigma_y/seed from get_parameters)
 # ------------------------------------------------------------
 @torch.no_grad()
 def run_once(
@@ -87,74 +87,69 @@ def run_once(
     rho: float = 0.0,
     dataset: str = "lorenz63",
     seed: int = 42,
-    test_traj_num: int = 64*16,
+    test_traj_num: int = 64*8,
     test_batch_size: int = 64,
     use_dapper_for_enkf: bool = True,
 ) -> tuple[float, float]:
-    # start from a fresh parse, then copy neutral defaults from base_args
-    args = get_parameters()
-    # for k, v in vars(base_args).items():
-    #     setattr(args, k, v)
+    # fresh parse every run
+    args = BASE_ARGS
+
+    # --- pull key values from base_args (get_parameters) with hard-coded fallbacks ---
+    args.dataset = getattr(BASE_ARGS, "dataset", dataset)
+    args.sigma_y = getattr(BASE_ARGS, "sigma_y", 2)       # your previous hard-coded 2 preserved
+    args.seed     = getattr(BASE_ARGS, "seed", seed)
 
     # common config
     args.test_only = True
     args.v = method
     args.N = N
     args.cp_load_path = 'no'
-    args.seed = seed
-    args.random_noise = True
-    args.access_to_noise = False
-    args.test_traj_num = test_traj_num
-    args.test_batch_size = test_batch_size
-    args.dataset = 'lorenz63'
-    args.sigma_y = 2
+    # args.random_noise = False
+    args.access_to_noise = True
+    args.test_traj_num = getattr(BASE_ARGS, "test_traj_num", test_traj_num)
+    args.test_batch_size = getattr(BASE_ARGS, "test_batch_size", test_batch_size)
 
     # SMF knobs (match your stochastic_map_filter_analysis signature)
     if method == 'SMF':
         args.smf_rho = float(rho)
-        args.smf_rbf_p = int(p_rbf)                 # <- name expected by your code
-        # args.include_y_in_bias = getattr(args, 'include_y_in_bias', False)
+        args.smf_rbf_p = int(p_rbf)
 
     if args.seed is not None and args.seed != "None":
         torch.manual_seed(int(args.seed))
 
     # dataloader + H
     test_loader = get_dataloader(args, test_only=True)
-    print(args.ori_dim, args.obs_inds, args.device, 'here')
     H_info = partial_obs_operator(args.ori_dim, args.obs_inds, args.device)
 
-    # EnKF tuning from DAPPER CSV (if present)
+    # EnKF explicit knobs (simple defaults; you can still swap to CSV helper later)
     infl = 1.05
     loc_radius = None
-    # if method == 'EnKF' and use_dapper_for_enkf:
-    #     args_enkf = get_parameters()
-    #     args_enkf.v = 'EnKF'
-    #     args_enkf.N = N
-    #     # use whatever dataset this run is using
-    #     args_enkf.dataset = args.dataset
-    #     best = get_benchmarks(args_enkf)  # returns (loc_radius, infl) or (None, None)
-    #     if best != (None, None):
-    #         loc_radius, infl = best
 
     # run and summarize
-    print(args.dataset)
-    rrmse_tensor, _ = test_ClassicFilter_v2(
-        test_loader,
-        args,
-        plot=False,
-        H_info=H_info,
-        plot_figures=False,
-        save_pdf=False,
-        infl=infl,
-        loc_radius=loc_radius
-    )
-    mean_rrmse = torch.nanmean(rrmse_tensor).item()
-    std_rrmse = torch.nanstd(rrmse_tensor).item()
-    return mean_rrmse, std_rrmse
+    print(f"Running {method} dataset={args.dataset} N={N}, p_rbf={p_rbf}, rho={rho}, "
+          f"loc_radius={loc_radius}, infl={infl}")
+    try:
+        rrmse_tensor = test_ClassicFilter_v2(
+            test_loader,
+            args,
+            plot=False,
+            H_info=H_info,
+            plot_figures=False,
+            save_pdf=False,
+            infl=infl,
+            loc_radius=loc_radius
+        )
+        mean_rmse = rrmse_tensor['mean_rmse']
+        std_rmse = rrmse_tensor['std_rmse']
+    except Exception as e:
+        print(f"Error running {method} with N={N}, p_rbf={p_rbf}, rho={rho}: {e}")
+        mean_rmse = float('nan')
+        std_rmse = float('nan')
+    return mean_rmse, std_rmse
 
 
 # ------------------------------------------------------------
-# Grid over N and rho (for SMF)
+# Grid over N and rho (for SMF) — unchanged except base_args use
 # ------------------------------------------------------------
 def sweep_methods_vs_N(
     dataset: str = "lorenz63",
@@ -171,8 +166,8 @@ def sweep_methods_vs_N(
         'best_rho': float or None
     }
     """
-    base_args = get_parameters()
-    base_args.dataset = dataset
+    # base_args = get_parameters()
+    # base_args.dataset = dataset
 
     _ensure_dir("smf_results")
     cache_path = f"smf_results/smf_vsN_cache_{dataset}.pt"
@@ -188,7 +183,7 @@ def sweep_methods_vs_N(
             print(f"[skip] EnKF N={N} already in cache.")
             continue
         mean_rrmse, std_rrmse = run_once(
-            base_args, N, "EnKF",
+            BASE_ARGS, N, "EnKF",
             dataset=dataset, seed=seed
         )
         results[enkf_key][N] = {
@@ -211,7 +206,7 @@ def sweep_methods_vs_N(
             best_rho = None
             for rho in rho_grid:
                 mean_rrmse, std_rrmse = run_once(
-                    base_args, N, "SMF",
+                    BASE_ARGS, N, "SMF",
                     p_rbf=p, rho=rho,
                     dataset=dataset, seed=seed
                 )
@@ -232,7 +227,7 @@ def sweep_methods_vs_N(
 
 
 # ------------------------------------------------------------
-# Plotting
+# Plotting (unchanged)
 # ------------------------------------------------------------
 def plot_rrmse_vs_N(results: Dict, dataset: str):
     out_dir = f"smf_results/plots/{dataset}"
@@ -284,20 +279,37 @@ def plot_rrmse_vs_N(results: Dict, dataset: str):
 
 
 # ------------------------------------------------------------
-# Main
+# Main — get_parameters() decides dataset/sigma_y/seed; Ns/rho hard-coded
 # ------------------------------------------------------------
 if __name__ == "__main__":
-    # Choose dataset here: "lorenz63" or "lorenz96"
-    DATASET = "lorenz63"
+    BASE_ARGS = get_parameters()
+    # dataset from get_parameters(); defaults to 'lorenz63' if missing
+    DATASET = getattr(BASE_ARGS, "dataset", "lorenz63")
+    # BASE_ARGS = get_parameters()              # picks up --dataset, --sigma_y, --seed, etc. from CLI
+    BASE_ARGS.test_only = True
+    # BASE_ARGS.random_noise = False
+    # BASE_ARGS.access_to_noise = True
+    BASE_ARGS.test_traj_num = 64 * 16
+    BASE_ARGS.test_batch_size = 64
+    BASE_ARGS.cp_load_path = 'no'
+    BASE_ARGS.sigma_y = 2
+    BASE_ARGS.dataset = 'lorenz63'
+    BASE_ARGS.access_to_H = True
+    BASE_ARGS.access_to_noise = True
+    BASE_ARGS.random_noise = False
+    # keep dataset and sigma_y from CLI; hard-code a seed unless overridden by CLI
+    if getattr(BASE_ARGS, 'seed', None) in (None, "None"):
+        BASE_ARGS.seed = 42
 
+    # hard-coded sweep ranges (per your request)
     Ns = [10, 20, 40, 60, 100, 200, 400]
-    rho_grid = [round(0.05*i, 2) for i in range(0, 11)]  # 0.00..0.50
-
+    rho_grid = [round(0.1*i, 2) for i in range(0, 6)]  # 0.00..0.50
     results = sweep_methods_vs_N(
         dataset=DATASET,
         Ns=Ns,
         rho_grid=rho_grid,
         p_rbfs=[0, 1, 2],
-        seed=42
+        seed=getattr(BASE_ARGS, "seed", 42)
     )
+    
     plot_rrmse_vs_N(results, dataset=DATASET)

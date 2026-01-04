@@ -2,7 +2,7 @@
 
 # Submit this script with: sbatch <this-filename>
 
-#SBATCH --time=2-00:00:00     # walltime (2 days)
+#SBATCH --time=3-00:00:00     # walltime (3 days)
 #SBATCH --nodes=1             # number of nodes (1 node)
 #SBATCH --gres=gpu:3          # 3 GPUs of any type
 #SBATCH --partition=gpu       # use GPU partition
@@ -21,4 +21,4 @@
 cd $HOME/gkappaga-DALearning-2/DALearning-copied
 
 # Run the experiment script (no args expected)
-python smf_plots.py
+python evaluate_benchmark.py --v SMF --N 100 --dataset lorenz63 --sigma_y 2 --smf_rbf_p 2 --smf_rho 0.025 --access_to_noise --access_to_H

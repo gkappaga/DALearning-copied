@@ -5,6 +5,7 @@ import math
 import time # For timing analysis steps
 from tqdm import tqdm
 from localization import pairwise_distances, dist2coeff
+from smf_rbf_analysis import *
 
 # import matplotlib.pyplot as plt # Uncomment for plotting GC test or RMSEs
 
@@ -313,245 +314,8 @@ def _smf_mask_cov_with_dist(Sxx: torch.Tensor, distMat: torch.Tensor | None, off
     return S_mask - torch.diag_embed(torch.diagonal(S_mask, dim1=-2, dim2=-1)) + torch.diag_embed(diag)
 
 # -------------------- RBF helpers --------------------
-def _choose_centers_scales(vals: torch.Tensor, p: int):
-    """
-    vals: (B,N) centered scalar samples for one input (per batch).
-    Returns (centers, scales) with shapes (B,p), (B,p). If p==0 → (None,None).
-    """
-    if p == 0:
-        return None, None
-    # simple per-batch quantiles for centers; robust scale from std
-    if p == 1:
-        qlist = [0.5]
-    elif p == 2:
-        qlist = [0.33, 0.67]
-    else:
-        raise ValueError("Only p in {0,1,2} supported.")
-    centers = torch.stack([vals.quantile(q, dim=1) for q in qlist], dim=-1)  # (B,p)
-    scales = vals.std(dim=1, unbiased=True).clamp_min(1e-6)                  # (B,)
-    scales = torch.stack([scales for _ in range(len(qlist))], dim=-1)        # (B,p)
-    return centers, scales
-
-def _rbf_features(x: torch.Tensor, centers: torch.Tensor, scales: torch.Tensor):
-    """
-    x: (B,N) centered scalar; centers/scales: (B,p).
-    Returns Φ_rbf: (B,N,p) with exp(-0.5 * ((x-c)/s)^2).
-    """
-    B, N = x.shape
-    p = centers.shape[-1]
-    xc = x.unsqueeze(-1) - centers.unsqueeze(1)        # (B,N,p)
-    s  = scales.unsqueeze(1).clamp_min(1e-6)           # (B,1,p)
-    z  = xc / s
-    return torch.exp(-0.5 * z * z)                     # (B,N,p)
 
 
-# -------------------- Separable map params & predictor --------------------
-class SeparableLinRBFParams:
-    """
-    Holds per-component coefficients and per-input RBF centers/scales.
-    betas[k] is a dict: {'y': β0 or None, 'i': {i: β_i}} with β blocks sized (1+p_rbf).
-    """
-    def __init__(self, betas, centers, scales, include_y: bool, p_rbf: int):
-        self.betas = betas
-        self.centers = centers   # {'y': (B,p) or None, 'i': {i: (B,p) or None}}
-        self.scales  = scales    # same keys as centers
-        self.include_y = include_y
-        self.p_rbf = p_rbf
-
-def _predict_mu_x_given_z_separable(Zc: torch.Tensor, mu_x: torch.Tensor, params: SeparableLinRBFParams):
-    """
-    Zc: (B,N,m) centered obs; mu_x: (B,d); returns μ̂_x|z (B,N,d).
-    """
-    B, N, m = Zc.shape
-    d = mu_x.shape[-1]
-    device, dt = Zc.device, Zc.dtype
-    Xhat = torch.zeros(B, N, d, device=device, dtype=dt)
-
-    for k in range(d):
-        used = list(range(min(k+1, m)))
-        cols = []
-        βk = params.betas[k]
-
-        # optional u0^k(y): here we use z_0 as the "y" data term (same as paper’s separable form)
-        if params.include_y and m > 0 and (βk['y'] is not None):
-            y = Zc[..., 0]  # (B,N)
-            blocks = [y.unsqueeze(-1)]  # linear term
-            if params.p_rbf > 0:
-                blocks.append(_rbf_features(y, params.centers['y'], params.scales['y']))
-            Φy = torch.cat(blocks, dim=-1)   # (B,N,1+p)
-            cols.append(Φy @ βk['y'].unsqueeze(-1))  # (B,N,1)
-
-        # sum_i u_i^k(z_i), i ≤ k
-        for i in used:
-            zi = Zc[..., i]
-            blocks = [zi.unsqueeze(-1)]
-            if params.p_rbf > 0:
-                blocks.append(_rbf_features(zi, params.centers['i'][i], params.scales['i'][i]))
-            Φi = torch.cat(blocks, dim=-1)  # (B,N,1+p)
-            cols.append(Φi @ βk['i'][i].unsqueeze(-1))  # (B,N,1)
-
-        Xhat[..., k:k+1] = sum(cols) if cols else 0.0
-
-    return Xhat + mu_x.unsqueeze(1)
-
-
-# -------------------- Fit separable linear + RBF map --------------------
-def _smf_fit_separable_linear_rbf(
-    Z: torch.Tensor,   # (B,N,m) synthetic obs (NOT centered)
-    X: torch.Tensor,   # (B,N,d) state (NOT centered)
-    p_rbf: int,        # 1 or 2
-    include_y: bool = False
-):
-    """
-    Paper-faithful separable fit with p RBFs (p in {1,2}).
-    For each k: x_k <- u0^k(y) + sum_{i<=k} u_i^k(z_i), where each u is linear on [t, RBFs(t)].
-    Returns (mu_z, mu_x, params, L).
-    """
-    assert p_rbf in (1, 2), "p_rbf must be 1 or 2 for RBF mode."
-    B, N, m = Z.shape
-    d = X.shape[-1]
-    device, dt = X.device, X.dtype
-
-    # means & centered
-    mu_z = Z.mean(1)                 # (B,m)
-    mu_x = X.mean(1)                 # (B,d)
-    Zc = Z - mu_z.unsqueeze(1)       # (B,N,m)
-    Xc = X - mu_x.unsqueeze(1)       # (B,N,d)
-
-    # precompute centers/scales for each scalar input we may use (per-batch)
-    centers = {'y': None, 'i': {}}
-    scales  = {'y': None, 'i': {}}
-    if include_y and m > 0:
-        cy, sy = _choose_centers_scales(Zc[..., 0], p_rbf)
-        centers['y'], scales['y'] = cy, sy
-    for i in range(m):
-        ci, si = _choose_centers_scales(Zc[..., i], p_rbf)
-        centers['i'][i] = ci
-        scales['i'][i]  = si
-
-    betas = []
-    # predict to form residual covariance later
-    Xhat = torch.zeros(B, N, d, device=device, dtype=dt)
-
-    for k in range(d):
-        used = list(range(min(k+1, m)))
-        blocks = []
-        # u0^k(y)
-        if include_y and m > 0:
-            y = Zc[..., 0]  # (B,N)
-            b = [y.unsqueeze(-1)]  # linear term
-            b.append(_rbf_features(y, centers['y'], scales['y']))  # (B,N,p)
-            Φy = torch.cat(b, dim=-1)  # (B,N,1+p)
-            blocks.append(Φy)
-        # sum_i u_i^k(z_i)
-        for i in used:
-            zi = Zc[..., i]
-            b = [zi.unsqueeze(-1)]
-            b.append(_rbf_features(zi, centers['i'][i], scales['i'][i]))  # (B,N,p)
-            Φi = torch.cat(b, dim=-1)  # (B,N,1+p)
-            blocks.append(Φi)
-
-        # Concatenate features horizontally
-        Φk = torch.cat(blocks, dim=-1) if blocks else torch.zeros(B, N, 0, device=device, dtype=dt)  # (B,N,q_k)
-        xk = Xc[..., k:k+1]  # (B,N,1)
-
-        βk = torch.linalg.lstsq(Φk, xk).solution  # (B,q_k,1)
-
-        # Split βk back into blocks
-        βrec = {'y': None, 'i': {}}
-        offs = 0
-        q_block = 1 + p_rbf
-        if include_y and m > 0:
-            βrec['y'] = βk[:, offs:offs+q_block, :].squeeze(-1)  # (B,1+p)
-            offs += q_block
-        for i in used:
-            βrec['i'][i] = βk[:, offs:offs+q_block, :].squeeze(-1)  # (B,1+p)
-            offs += q_block
-        betas.append(βrec)
-
-        # Predict x̂_k and store
-        Xhat[..., k:k+1] = Φk @ βk
-
-    # residual covariance and Cholesky
-    R = Xc - Xhat
-    Sx_given_z = (R.transpose(1,2) @ R) / max(1, N-1)
-    Sx_given_z = 0.5 * (Sx_given_z + Sx_given_z.transpose(1,2))
-    L = torch.linalg.cholesky(Sx_given_z)
-
-    params = SeparableLinRBFParams(betas, centers, scales, include_y=include_y, p_rbf=p_rbf)
-    return mu_z, mu_x, params, L
-
-# -------------------- Separable KR map (RBF) --------------------
-class SMFSeparableKR:
-    """
-    Separable/triangular map with linear+RBF component functions.
-    forward: u = L^{-1}(x - μ̂_x|z)
-    inverse: x = μ̂_x|z* + L u
-    """
-    def __init__(self, mu_z, mu_x, params: SeparableLinRBFParams, L, nonId_radius=None, meta=None):
-        self.kind = "smf_separable_rbf"
-        self.mu_z = mu_z          # (B,m)
-        self.mu_x = mu_x          # (B,d)
-        self.params = params
-        self.L = L                # (B,d,d)
-        self.nonId_radius = nonId_radius
-        self.meta = {} if meta is None else meta
-
-    @torch.no_grad()
-    def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        # ensure z has shape (B,N,m)
-        if z.dim() == 2:
-            z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)
-        zc = z - self.mu_z.unsqueeze(1)
-        mu_x_given_z = _predict_mu_x_given_z_separable(zc, self.mu_x, self.params)  # (B,N,d)
-        y = (x - mu_x_given_z).transpose(1,2)                                       # (B,d,N)
-        u = torch.linalg.solve_triangular(self.L, y, upper=False).transpose(1,2)
-        return u
-
-    @torch.no_grad()
-    def inverse(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-        if z.dim() == 2:
-            z = z.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
-        zc = z - self.mu_z.unsqueeze(1)
-        mu_x_given_z = _predict_mu_x_given_z_separable(zc, self.mu_x, self.params)
-        return mu_x_given_z + (u @ self.L.transpose(1,2))
-
-
-# def _smf_fit_linear_KR(Z: torch.Tensor,
-#                        X: torch.Tensor,
-#                        distMat: torch.Tensor | None = None,
-#                        offdiag_rad: float | None = None,
-#                        jitter: float = 1e-6):
-#     """
-#     Batched linear triangular KR map for joint [Z, X].
-#     Returns parameters for S^X(z,x) = L^{-1}_{x|z} ( x - μ_{x|z} ).
-#     """
-#     B, N, m = Z.shape
-#     d = X.shape[2]
-#     device, dtype = X.device, X.dtype
-
-#     mu_z = Z.mean(1)  # (B,m)
-#     mu_x = X.mean(1)  # (B,d)
-#     Zc = Z - mu_z.unsqueeze(1)
-#     Xc = X - mu_x.unsqueeze(1)
-
-#     Szz = (Zc.transpose(1,2) @ Zc) / max(1, N - 1)
-#     Sxz = (Xc.transpose(1,2) @ Zc) / max(1, N - 1)     # (B,d,m)
-#     Sxx = (Xc.transpose(1,2) @ Xc) / max(1, N - 1)     # (B,d,d)
-
-#     # localization (optional)
-#     Sxx = _smf_mask_cov_with_dist(Sxx, distMat, offdiag_rad)
-
-#     eye_m = torch.eye(Z.shape[-1], device=device, dtype=dtype).unsqueeze(0)
-#     eye_d = torch.eye(d, device=device, dtype=dtype).unsqueeze(0)
-#     Szz = Szz + jitter * eye_m
-#     Sxx = Sxx + jitter * eye_d
-
-#     Szz_inv = torch.linalg.inv(Szz)
-#     # Σ_{x|z} = Sxx - Sxz Szz^{-1} Sxz^T
-#     Sx_given_z = Sxx - Sxz @ (Szz_inv @ Sxz.transpose(1,2))
-#     L = torch.linalg.cholesky(Sx_given_z)              # (B,d,d)
-#     return mu_z, mu_x, Szz_inv, Sxz, L
 def _smf_fit_linear_KR(Z: torch.Tensor,
                        X: torch.Tensor,
                        distMat: torch.Tensor | None = None,
@@ -598,7 +362,7 @@ def _smf_fit_linear_KR(Z: torch.Tensor,
 
     return mu_z, mu_x, A, L
 
-def _chol_spd(C: torch.Tensor, max_tries: int = 8):
+def _chol_spd(C: torch.Tensor, max_tries: int = 12):
     """
     Robust batch Cholesky: symmetric, try cholesky_ex; if it fails,
     add eps * mean(diag) I, with eps escalating 1e-12,1e-11,... until it works.
@@ -663,36 +427,10 @@ def _smf_fit_linear_KR_perk(Z: torch.Tensor, X: torch.Tensor,
     Sx_given_z = (Rres.transpose(1,2) @ Rres) / max(1, N-1)
     # Robust Cholesky (adds tiny trace-scaled jitter only if needed)
     L = _chol_spd(Sx_given_z)
+    # L = torch.linalg.cholesky(Sx_given_z)
 
     return mu_z, mu_x, A, L
 
-
-
-
-# def _smf_forward_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z, x):
-#     """
-#     u = L^{-1} ( x - μ_{x|z} ), batched over B.
-#     z: (B,N,m) or (B,m); x: (B,N,K) -> u: (B,N,K)
-#     """
-#     # Ensure z has (B,N,m)
-#     if z.dim() == 2:
-#         z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)  # (B,N,m)
-
-#     # zc: (B,N,m)
-#     zc = z - mu_z.unsqueeze(1)
-
-#     # A := Szz_inv @ Sxz^T  -> (B, m, K)
-#     # (Sxz is (B,K,m) so Sxz.transpose(1,2) is (B,m,K))
-#     A = Szz_inv @ Sxz.transpose(1, 2)  # (B,m,K)
-
-#     # μ_{x|z} = μ_x + (z - μ_z) @ A  -> (B, N, K)
-#     mu_x_given_z = mu_x.unsqueeze(1) + zc @ A  # (B,N,m) @ (B,m,K) -> (B,N,K)
-
-#     # u = L^{-1} (x - μ_{x|z})
-#     y = (x - mu_x_given_z).transpose(1, 2)              # (B,K,N)
-#     # u = torch.cholesky_solve(y, L).transpose(1, 2)      # (B,N,K)
-#     u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
-#     return u
 
 def _smf_forward_linear_KR(mu_z, mu_x, A, L, z, x):
     """
@@ -711,27 +449,6 @@ def _smf_forward_linear_KR(mu_z, mu_x, A, L, z, x):
     return u
 
 
-
-# def _smf_inverse_linear_KR(mu_z, mu_x, Szz_inv, Sxz, L, z_star, u):
-#     """
-#     x = μ_{x|z*} + L u, batched.
-#     z_star: (B,m) or (B,N,m); u: (B,N,K) -> x: (B,N,K)
-#     """
-#     # Ensure z_star has (B,N,m)
-#     if z_star.dim() == 2:
-#         z_star = z_star.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
-
-#     zc = z_star - mu_z.unsqueeze(1)  # (B,N,m)
-
-#     # A := Szz_inv @ Sxz^T  -> (B, m, K)
-#     A = Szz_inv @ Sxz.transpose(1, 2)  # (B,m,K)
-
-#     # μ_{x|z*} = μ_x + (z* - μ_z) @ A  -> (B,N,K)
-#     mu_x_given_zstar = mu_x.unsqueeze(1) + zc @ A
-
-#     # x = μ_{x|z*} + L u
-#     return mu_x_given_zstar + (u @ L.transpose(1, 2))
-
 def _smf_inverse_linear_KR(mu_z, mu_x, A, L, z_star, u):
     """
     x = μ_{x|z*} + L u, batched.
@@ -743,53 +460,6 @@ def _smf_inverse_linear_KR(mu_z, mu_x, A, L, z_star, u):
     zc = z_star - mu_z.unsqueeze(1)                         # (B,N,m)
     mu_x_given_zstar = mu_x.unsqueeze(1) + zc @ A           # (B,N,d)
     return mu_x_given_zstar + (u @ L.transpose(1, 2))
-
-
-# class SMFLinearKR:
-#     """
-#     Transport map container for the SMF linear KR map.
-#     Holds parameters and exposes forward/inverse like a 'transform'.
-#     Shapes are batched by B.
-#     """
-#     def __init__(self, mu_z, mu_x, Szz_inv, Sxz, L, nonId_radius=None, meta=None):
-#         self.kind = "smf_linear_kr"
-#         self.mu_z = mu_z              # (B, m)
-#         self.mu_x = mu_x              # (B, K)
-#         self.Szz_inv = Szz_inv        # (B, m, m)
-#         self.Sxz = Sxz                # (B, K, m)
-#         self.L = L                    # (B, K, K)
-#         self.nonId_radius = nonId_radius
-#         self.meta = {} if meta is None else meta
-
-#     @torch.no_grad()
-#     def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-#         """
-#         u = S^X(z,x) = L^{-1} (x - μ_{x|z})
-#         z: (B, m) or (B, N, m); x: (B, N, K) -> u: (B, N, K)
-#         """
-#         mu_z, mu_x, Szz_inv, Sxz, L = self.mu_z, self.mu_x, self.Szz_inv, self.Sxz, self.L
-#         if z.dim() == 2:
-#             z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)  # (B,N,m)
-#         zc = z - mu_z.unsqueeze(1)
-#         # μ_{x|z} = μ_x + Sxz Szz^{-1} (z - μ_z)
-#         mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
-#         y = (x - mu_x_given_z).transpose(1,2)                # (B,K,N)
-#         # u = torch.cholesky_solve(y, L).transpose(1,2)        # (B,N,K)
-#         u = torch.linalg.solve_triangular(L, y, upper=False).transpose(1, 2)
-#         return u
-
-#     @torch.no_grad()
-#     def inverse(self, z: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-#         """
-#         x = (S^X(z,·))^{-1}(u) = μ_{x|z} + L u
-#         z: (B, m) or (B, N, m); u: (B, N, K) -> x: (B, N, K)
-#         """
-#         mu_z, mu_x, Szz_inv, Sxz, L = self.mu_z, self.mu_x, self.Szz_inv, self.Sxz, self.L
-#         if z.dim() == 2:
-#             z = z.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
-#         zc = z - mu_z.unsqueeze(1)
-#         mu_x_given_z = mu_x.unsqueeze(1) + (zc @ (Szz_inv.transpose(1,2) @ Sxz.transpose(1,2))).transpose(1,2)
-#         return mu_x_given_z + (u @ L.transpose(1,2))
 
 class SMFLinearKR:
     """
@@ -834,6 +504,313 @@ class SMFLinearKR:
         mu_x_given_z = mu_x.unsqueeze(1) + zc @ A
         return mu_x_given_z + (u @ L.transpose(1,2))
 
+# ======================================================================
+# RESTORE-ORIGINAL RBF PATH (matches what you pasted before)
+# - Keeps your original behavior: used = range(min(k+1, m))
+# - Fixed N(0,1) quantile centers + fixed widths
+# - include_y adds an extra "y" block (can double-count z0, as before)
+# - DOES NOT TOUCH ANY LINEAR CODE
+#
+# Drop this block ABOVE stochastic_map_filter_analysis, and make sure your
+# p_rbf != 0 branch calls _smf_fit_separable_linear_rbf + _predict... exactly
+# like in your pasted code.
+# ======================================================================
+
+import torch
+from torch.distributions.normal import Normal
+
+_STD_FLOOR = 1e-8
+
+
+def _rbf_features(z_std: torch.Tensor, centers_std: torch.Tensor, widths_std: torch.Tensor):
+    """
+    RBF features on ALREADY-standardized scalar input.
+    z_std: (B,N)
+    centers_std: (B,p)
+    widths_std: (B,p)
+    returns: (B,N,p) with zero-mean columns (as in your original)
+    """
+    xc = z_std.unsqueeze(-1) - centers_std.unsqueeze(1)          # (B,N,p)
+    s  = widths_std.unsqueeze(1).clamp_min(1e-6)                 # (B,1,p)
+    u  = xc / s
+    Phi = torch.exp(-0.5 * u * u)                                # (B,N,p)
+    Phi = Phi - Phi.mean(dim=1, keepdim=True)                    # zero-mean per feature
+    return Phi
+
+
+class SeparableLinRBFParams:
+    """
+    Stores the fitted separable regression parameters.
+
+    betas: list length d, each element is {'y': (B,q) or None, 'i': {i: (B,q)}}
+    centers_std: {'y': (B,p) or None, 'i': {i: (B,p)}}
+    widths_std:  {'y': (B,p) or None, 'i': {i: (B,p)}}
+    mu_z_i/std_z_i: dict i -> (B,) standardization stats for each observed component
+    """
+    def __init__(
+        self,
+        *,
+        betas,
+        centers_std,
+        widths_std,
+        mu_z_i,
+        std_z_i,
+        include_y: bool,
+        p_rbf: int
+    ):
+        self.betas = betas
+        self.centers_std = centers_std
+        self.widths_std = widths_std
+        self.mu_z_i = mu_z_i
+        self.std_z_i = std_z_i
+        self.include_y = bool(include_y)
+        self.p_rbf = int(p_rbf)
+
+
+def _predict_mu_x_given_z_separable(Z: torch.Tensor, mu_x: torch.Tensor, params: SeparableLinRBFParams):
+    """
+    Predict μ̂_{x|z} using stored standardization stats + separable blocks.
+    Z: (B,N,m) RAW observations (not centered/standardized)
+    mu_x: (B,d)
+    returns: (B,N,d)
+    """
+    B, N, m = Z.shape
+    d = mu_x.shape[-1]
+    device, dtype = Z.device, Z.dtype
+
+    # Standardize Z using stored stats (only dims that exist)
+    Z_std = torch.zeros_like(Z)
+    for i in range(m):
+        mu_i = params.mu_z_i[i].to(device=device, dtype=dtype).unsqueeze(1)   # (B,1)
+        sd_i = params.std_z_i[i].to(device=device, dtype=dtype).unsqueeze(1).clamp_min(_STD_FLOOR)
+        Z_std[..., i] = (Z[..., i] - mu_i) / sd_i
+
+    Xhat = torch.zeros(B, N, d, device=device, dtype=dtype)
+    q_block = 1 + params.p_rbf
+
+    for k in range(d):
+        used = list(range(min(k + 1, m)))  # <-- ORIGINAL behavior
+        mats = []
+
+        # Optional u0^k(y) where y is first observation component
+        if params.include_y and m > 0:
+            y_std = Z_std[..., 0]                          # (B,N)
+            col = y_std.unsqueeze(-1)                      # (B,N,1)
+            if params.p_rbf > 0:
+                Phi_y = _rbf_features(y_std, params.centers_std['y'], params.widths_std['y'])  # (B,N,p)
+                col = torch.cat([col, Phi_y], dim=-1)      # (B,N,1+p)
+            mats.append(col)
+
+        # u_i^k(z_i) terms
+        for i in used:
+            zi_std = Z_std[..., i]
+            col = zi_std.unsqueeze(-1)
+            if params.p_rbf > 0:
+                Phi_i = _rbf_features(zi_std, params.centers_std['i'][i], params.widths_std['i'][i])
+                col = torch.cat([col, Phi_i], dim=-1)
+            mats.append(col)
+
+        if not mats:
+            Xhat[..., k] = 0.0
+            continue
+
+        Phi_k = torch.cat(mats, dim=-1)                    # (B,N,q_k)
+
+        # Rebuild beta blocks in the same order used to build Phi_k
+        beta_blocks = []
+        if params.include_y and m > 0:
+            beta_blocks.append(params.betas[k]['y'].unsqueeze(-1))            # (B,q_block,1)
+        for i in used:
+            beta_blocks.append(params.betas[k]['i'][i].unsqueeze(-1))         # (B,q_block,1)
+
+        beta_k = torch.cat(beta_blocks, dim=1)              # (B,q_k,1)
+        Xhat[..., k:k+1] = Phi_k @ beta_k                   # (B,N,1)
+
+    return Xhat + mu_x.unsqueeze(1)
+
+
+def _smf_fit_separable_linear_rbf(
+    Z: torch.Tensor,   # (B,N,m) synthetic obs (RAW)
+    X: torch.Tensor,   # (B,N,d) state (RAW)
+    p_rbf: int,        # 1 or 2
+    include_y: bool = False
+):
+    """
+    RESTORED version: matches your pasted code.
+    - Standardize Z once using per-dim mean/std
+    - Fixed centers from N(0,1) quantiles
+    - Fixed widths [1.0] or [0.8,1.2]
+    - Fit each x_k on features of used z dims (min(k+1,m)) and optional y-term
+    - L from residual covariance
+    """
+    p_rbf = int(p_rbf)
+    assert p_rbf in (1, 2), "p_rbf must be 1 or 2"
+    B, N, m = Z.shape
+    d = X.shape[-1]
+    device, dtype = X.device, X.dtype
+
+    # Output mean & center
+    mu_x = X.mean(1)                 # (B,d)
+    Xc   = X - mu_x.unsqueeze(1)     # (B,N,d)
+
+    # 1) stats from raw Z
+    mu_z_i, std_z_i = {}, {}
+    for i in range(m):
+        zi = Z[..., i]
+        mu_z_i[i]  = zi.mean(dim=1)                                      # (B,)
+        std_z_i[i] = zi.std(dim=1, unbiased=True).clamp_min(1e-6)        # (B,)
+
+    # 2) standardize all Z
+    Z_std = torch.zeros_like(Z)
+    for i in range(m):
+        Z_std[..., i] = (Z[..., i] - mu_z_i[i].unsqueeze(1)) / std_z_i[i].unsqueeze(1)
+
+    # 3) fixed centers/widths in standardized space
+    centers_std = {'y': None, 'i': {}}
+    widths_std  = {'y': None, 'i': {}}
+
+    if p_rbf > 0:
+        q_vals = torch.arange(1, p_rbf+1, device=device, dtype=dtype) / (p_rbf + 1.0)
+        fixed_centers = Normal(0.0, 1.0).icdf(q_vals)  # (p_rbf,)
+
+        if p_rbf == 1:
+            fixed_widths = torch.tensor([1.0], device=device, dtype=dtype)
+        else:
+            fixed_widths = torch.tensor([0.8, 1.2], device=device, dtype=dtype)
+
+        centers_batch = fixed_centers.unsqueeze(0).expand(B, -1)  # (B,p_rbf)
+        widths_batch  = fixed_widths.unsqueeze(0).expand(B, -1)   # (B,p_rbf)
+
+        if include_y and m > 0:
+            centers_std['y'] = centers_batch
+            widths_std['y']  = widths_batch
+
+        for i in range(m):
+            centers_std['i'][i] = centers_batch
+            widths_std['i'][i]  = widths_batch
+
+    # 4) fit each k
+    betas = []
+    Xhat = torch.zeros(B, N, d, device=device, dtype=dtype)
+
+    for k in range(d):
+        used = list(range(min(k + 1, m)))  # <-- ORIGINAL behavior
+        mats = []
+
+        if include_y and m > 0:
+            y_std = Z_std[..., 0]
+            col = y_std.unsqueeze(-1)
+            if p_rbf > 0:
+                col = torch.cat([col, _rbf_features(y_std, centers_std['y'], widths_std['y'])], dim=-1)
+            mats.append(col)
+
+        for i in used:
+            zi_std = Z_std[..., i]
+            col = zi_std.unsqueeze(-1)
+            if p_rbf > 0:
+                col = torch.cat([col, _rbf_features(zi_std, centers_std['i'][i], widths_std['i'][i])], dim=-1)
+            mats.append(col)
+
+        if mats:
+            Phi_k = torch.cat(mats, dim=-1)  # (B,N,q_k)
+        else:
+            Phi_k = torch.zeros(B, N, 0, device=device, dtype=dtype)
+
+        xk = Xc[..., k:k+1]  # (B,N,1)
+
+        if Phi_k.shape[-1] > 0:
+            G = Phi_k.transpose(1, 2) @ Phi_k
+            ridge = 1e-5 * torch.eye(G.shape[-1], device=device, dtype=dtype).unsqueeze(0)
+            beta_k = torch.linalg.solve(G + ridge, Phi_k.transpose(1, 2) @ xk)  # (B,q_k,1)
+        else:
+            beta_k = torch.zeros(B, 0, 1, device=device, dtype=dtype)
+
+        # store in blocks
+        rec = {'y': None, 'i': {}}
+        offs = 0
+        q_block = 1 + p_rbf
+
+        if include_y and m > 0:
+            rec['y'] = beta_k[:, offs:offs+q_block, 0]
+            offs += q_block
+
+        for i in used:
+            rec['i'][i] = beta_k[:, offs:offs+q_block, 0]
+            offs += q_block
+
+        betas.append(rec)
+
+        if Phi_k.shape[-1] > 0:
+            Xhat[..., k:k+1] = Phi_k @ beta_k
+
+    # 5) residual covariance -> L
+    R = Xc - Xhat
+    Sx_given_z = (R.transpose(1, 2) @ R) / max(1, N - 1)
+    Sx_given_z = 0.5 * (Sx_given_z + Sx_given_z.transpose(1, 2))
+    L = _chol_spd(Sx_given_z)  # uses your existing robust chol
+
+    params = SeparableLinRBFParams(
+        betas=betas,
+        centers_std=centers_std,
+        widths_std=widths_std,
+        mu_z_i=mu_z_i,
+        std_z_i=std_z_i,
+        include_y=include_y,
+        p_rbf=p_rbf
+    )
+    return mu_x, params, L
+
+
+class SMFSeparableKR:
+    """
+    Separable/triangular map with linear+RBF component functions.
+    forward: u = L^{-1}(x - μ̂_x|z)
+    inverse: x = μ̂_x|z* + L u
+    """
+    def __init__(self, mu_x, params: SeparableLinRBFParams, L, nonId_radius=None, meta=None):
+        self.kind = "smf_separable_rbf"
+        self.mu_x = mu_x          # (B,d)
+        self.params = params
+        self.L = L                # (B,d,d)
+        self.nonId_radius = nonId_radius
+        self.meta = {} if meta is None else meta
+
+    @torch.no_grad()
+    def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        if z.dim() == 2:
+            z = z.unsqueeze(1).expand(x.shape[0], x.shape[1], -1)
+        mu_x_given_z = _predict_mu_x_given_z_separable(z, self.mu_x, self.params)
+        y = (x - mu_x_given_z).transpose(1, 2)
+        return torch.linalg.solve_triangular(self.L, y, upper=False).transpose(1, 2)
+
+    @torch.no_grad()
+    def inverse(self, z_star: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        if z_star.dim() == 2:
+            z_star = z_star.unsqueeze(1).expand(u.shape[0], u.shape[1], -1)
+        mu_x_given_z = _predict_mu_x_given_z_separable(z_star, self.mu_x, self.params)
+        return mu_x_given_z + (u @ self.L.transpose(1, 2))
+
+
+# ======================================================================
+# In stochastic_map_filter_analysis, your RBF branch should be the SAME as before:
+#
+# else:
+#     mu_x, params, L = _smf_fit_separable_linear_rbf(
+#         Zs, X[:, :, :K], p_rbf=p_rbf, include_y=include_y_in_bias
+#     )
+#
+#     mu_x_given_z_fore = _predict_mu_x_given_z_separable(Zs, mu_x, params)
+#     Y = (X[:, :, :K] - mu_x_given_z_fore).transpose(1, 2)
+#     U = torch.linalg.solve_triangular(L, Y, upper=False).transpose(1, 2)
+#
+#     z_star_bn = y_star.unsqueeze(1).expand(U.shape[0], U.shape[1], -1)
+#     mu_x_given_z_star = _predict_mu_x_given_z_separable(z_star_bn, mu_x, params)
+#     X_firstK = mu_x_given_z_star + (U @ L.transpose(1, 2))
+#
+#     smf_map = SMFSeparableKR(mu_x=mu_x, params=params, L=L,
+#                              nonId_radius=K, meta={"p_rbf": p_rbf, "rho": rho})
+# ======================================================================
+
 
 
 def stochastic_map_filter_analysis(
@@ -847,7 +824,7 @@ def stochastic_map_filter_analysis(
     distMat: torch.Tensor | None = None,   # (d,d) pairwise state distances
     order_all: int = 1,                    # polynomial order; we implement 1 (linear)
     nonId_radius: int | None = None,       # # leading dims to transform; rest identity
-    offdiag_rad: float | None = None,      # localization radius for state-state cov
+    offdiag_rad: float = 0,      # localization radius for state-state cov
     rho: float = 0.0,                      # ensemble inflation on forecast
     jitter: float = 1e-6,                  # numerical jitter
     p_rbf: int = 0,                 # NEW: 0 = linear, 1 or 2 = linear+RBFs
@@ -858,7 +835,10 @@ def stochastic_map_filter_analysis(
     SM = StochasticMapFilter(model, options); filter = seq_assimilation(..., @SM.sample_posterior)
     with options M, distMat, order_all, nonId_radius, offdiag_rad, rho. :contentReference[oaicite:1]{index=1}
     """
+    smf_map = None  # will hold the resulting map
     X = particles_forecast
+    X = X.to(torch.float32)
+    observation_y = observation_y.to(torch.float32)
     B, N, d = X.shape
     device, dtype = X.device, X.dtype
 
@@ -886,7 +866,9 @@ def stochastic_map_filter_analysis(
         sig = torch.as_tensor(sigma_y, device=device, dtype=dtype).view(1,1,1)
     eps = torch.randn_like(Yf)
     eps = eps - eps.mean(dim=1, keepdim=True)     # zero-mean across particles per (B,·,m)
+
     Zs  = Yf + eps * sig                           # std, not variance
+    
 
     # 3) map scope (nonId_radius)
     K = d if (nonId_radius is None) else int(nonId_radius)
@@ -913,27 +895,135 @@ def stochastic_map_filter_analysis(
 
         else:
             # --- separable linear + RBF path (paper’s “linear + p RBFs”) ---
-            mu_z, mu_x, params, L = _smf_fit_separable_linear_rbf(
-                Zs, X[:, :, :K], p_rbf=p_rbf, include_y=include_y_in_bias
-            )
-            # forward/inverse use the separable predictor internally
-            # we still need U only if you log/inspect; inverse is what gives the analysis ensemble
-            # build U with the same logic as linear but with the separable predictor:
-            # (recompute μ̂_x|z for the forecast)
-            Zc_fore = Zs - mu_z.unsqueeze(1)
-            mu_x_given_z_fore = _predict_mu_x_given_z_separable(Zc_fore, mu_x, params)
-            Y = (X[:, :, :K] - mu_x_given_z_fore).transpose(1,2)    # (B,K,N)
-            U = torch.linalg.solve_triangular(L, Y, upper=False).transpose(1,2)
+            # --- separable linear + RBF path ---
+                # mu_x, params, L = _smf_fit_separable_linear_rbf(
+                #     Zs, X[:, :, :K], p_rbf=p_rbf, include_y=include_y_in_bias
+                # )
+            
+                # mu_x_given_z_fore = _predict_mu_x_given_z_separable(Zs, mu_x, params)
+                # Y = (X[:, :, :K] - mu_x_given_z_fore).transpose(1, 2)
+                # U = torch.linalg.solve_triangular(L, Y, upper=False).transpose(1, 2)
+            
+                # z_star_bn = y_star.unsqueeze(1).expand(U.shape[0], U.shape[1], -1)
+                # mu_x_given_z_star = _predict_mu_x_given_z_separable(z_star_bn, mu_x, params)
+                # X_firstK = mu_x_given_z_star + (U @ L.transpose(1, 2))
+            
+                # smf_map = SMFSeparableKR(mu_x=mu_x, params=params, L=L,
+                #                          nonId_radius=K, meta={"p_rbf": p_rbf, "rho": rho})
+                
+                y_star = observation_y if observation_y.ndim == 2 else observation_y.unsqueeze(0).expand(B, -1)
 
-            # now inverse at y*
-            # make z* shape compatible
-            z_star = y_star if y_star.dim() == 2 else y_star
-            zc_star = z_star.unsqueeze(1).expand(U.shape[0], U.shape[1], -1) - mu_z.unsqueeze(1)
-            mu_x_given_z_star = _predict_mu_x_given_z_separable(zc_star, mu_x, params)
-            X_firstK = mu_x_given_z_star + (U @ L.transpose(1,2))
+                # Wrap observation operator so it matches StochasticMapFilterPy._apply_H expectations:
+                # input (N,d) -> output (N,m)
+                if isinstance(observation_operator, torch.Tensor):
+                    H_for_smf = observation_operator  # matrix path works directly
+                else:
+                    H_fun = observation_operator
 
-            smf_map = SMFSeparableKR(mu_z=mu_z, mu_x=mu_x, params=params, L=L, nonId_radius=K,
-                                    meta={"p_rbf": p_rbf, "order_all": order_all, "rho": rho})
+                    _target_device = None
+                    _target_dtype = None
+
+                    # Best-effort: if H_fun has attributes that are tensors (e.g., .proj, .H, etc.)
+                    for name in ["proj", "H", "W", "weight", "matrix"]:
+                        if hasattr(H_fun, name) and isinstance(getattr(H_fun, name), torch.Tensor):
+                            t = getattr(H_fun, name)
+                            _target_device = t.device
+                            _target_dtype = t.dtype
+                            break
+
+                    # Fallback to float32 on same device as X if we can't infer
+                    def H_for_smf(Xn: torch.Tensor) -> torch.Tensor:
+                        # Xn: (N,d) coming from SMF code (likely float64)
+                        X_in = Xn
+                        if _target_device is not None:
+                            X_in = X_in.to(device=_target_device)
+                        else:
+                            X_in = X_in.to(device=Xn.device)
+
+                        if _target_dtype is not None:
+                            X_in = X_in.to(dtype=_target_dtype)
+                        else:
+                            X_in = X_in.to(dtype=torch.float32)
+
+                        # Call user H_fun (may expect (N,d) or (1,N,d) or (N,1,d))
+                        try:
+                            Y = H_fun(X_in)                      # (N,m) or (N,1,m) etc.
+                        except Exception:
+                            Y = H_fun(X_in.unsqueeze(0))         # (1,N,m) or (1,N,1,m)
+
+                        if isinstance(Y, (tuple, list)):
+                            Y = Y[0]
+
+                        # Squeeze common singleton dims
+                        if Y.dim() == 4 and Y.shape[0] == 1:
+                            Y = Y.squeeze(0)
+                        if Y.dim() == 3 and Y.shape[0] == 1:
+                            Y = Y.squeeze(0)
+                        if Y.dim() == 3 and Y.shape[1] == 1:
+                            Y = Y.squeeze(1)
+
+                        # IMPORTANT: return float64 for SMF internals
+                        return Y.to(device=Xn.device, dtype=torch.float64)
+
+                # sigma_y: make sure shape is (m,) if tensor
+                sig_for_smf = sigma_y
+                if isinstance(sig_for_smf, torch.Tensor):
+                    sig_for_smf = sig_for_smf.to(device=X.device, dtype=torch.float64).flatten()
+
+                # Call your batched wrapper on the first K dims only
+                print('hi1')
+                X_firstK = smf_transport_update(
+                    xf=X[:, :, :K].to(torch.float64),      # (B,N,K)
+                    y=y_star.to(torch.float64),            # (B,m)
+                    H=H_for_smf,
+                    sigma_y=sig_for_smf,
+                    distMat=(None if distMat is None else distMat.to(torch.float64)),
+                    offdiag_rad=float(0),
+                    p_rbf=int(p_rbf),
+                    diag_order=2,
+                    nonId_radius=K,
+                    M=M,
+                    lambda_=0,
+                    delta=1e-8,
+                    scalingRbf=2.0,
+                ).to(dtype=X.dtype)
+                print('hi')
+                print(X_firstK)
+
+                # Splice back into full state
+                X_analysis = X.clone()
+                X_analysis[:, :, :K] = X_firstK
+                X_firstK = X_analysis[:, :, :K]  # if you rely on this variable later
+            # x_dtype = X.dtype
+            # x_device = X.device
+
+            # H0 = observation_operator
+            # def h_float(X_in):
+            #     X_in = X_in.to(dtype=torch.float32, device=x_device)
+            #     out = H0(X_in)
+            #     return out.to(dtype=x_dtype, device=x_device)
+            
+            # # Get transformed variables U
+            # xa_particles = smf_transport_update(
+            #     xf=(particles_forecast),                 # or X (after inflation) if you want it applied
+            #     y=observation_y if observation_y.ndim == 2 else observation_y.unsqueeze(0).expand(B, -1),
+            #     H=h_float,
+            #     sigma_y=sigma_y,
+
+            #     distMat=distMat,                      # your (d,d) state distance matrix (or None)
+            #     offdiag_rad=float(0.0),              # your localization radius (float or None)
+
+            #     p_rbf=float(p_rbf),                          # your p_rbf argument (1 or 2)
+            #     nonId_radius=nonId_radius,            # OR pass K (see note below)
+            #     M=M,                                  # your M argument (or None)
+
+            #     # below are “extra knobs” that are NOT in your current function signature;
+            #     # set them to safe defaults unless/until we port MATLAB faithfully:
+            #     diag_order=float(2),
+            #     lambda_=float(0.0),
+            #     delta=float(1e-8),
+            #     scalingRbf=float(2.0),
+            # )
     else:
         X_firstK = X[:, :, :0]
 
@@ -941,31 +1031,34 @@ def stochastic_map_filter_analysis(
     X_a = torch.cat([X_firstK, X_tail], dim=-1) if K < d else X_firstK
 
     # 6) order_all: keep linear (1). Lifting to higher order can be added later.
-    if K > 0:
-        smf_map = SMFLinearKR(
-            mu_z=mu_z, mu_x=mu_x, A=A, L=L,
-            nonId_radius=K,
-            meta={
-                "distMat_used": offdiag_rad is not None,
-                "offdiag_rad": offdiag_rad,
-                "rho": rho,
-                "order_all": order_all,
-            },
-        )
-    else:
-        B, m = X.shape[0], Yf.shape[-1]
-        device, dtype = X.device, X.dtype
+    # if K > 0:
+    #     if p_rbf == 0:
+    #         # linear case: A is defined above
+    #         smf_map = SMFLinearKR(
+    #             mu_z=mu_z, mu_x=mu_x, A=A, L=L,
+    #             nonId_radius=K,
+    #             meta={
+    #                 "distMat_used": offdiag_rad is not None,
+    #                 "offdiag_rad": offdiag_rad,
+    #                 "rho": rho,
+    #                 "order_all": order_all,
+    #             },
+    #         )
+    #     else:
+    #         # RBF case: smf_map already set to SMFSeparableKR above; do NOT touch it
+    #         pass
+    # else:
+    #     B, m = X.shape[0], Yf.shape[-1]
+    #     device, dtype = X.device, X.dtype
+    #     smf_map = SMFLinearKR(
+    #         mu_z=torch.zeros(B, m, device=device, dtype=dtype),          # (B,m)
+    #         mu_x=torch.zeros(B, 0, device=device, dtype=dtype),          # (B,0)
+    #         A=torch.zeros(B, m, 0, device=device, dtype=dtype),          # (B,m,0)
+    #         L=torch.eye(0, device=device, dtype=dtype).unsqueeze(0).expand(B, 0, 0).contiguous(),
+    #         nonId_radius=0,
+    #         meta={"identity": True},
+    #     )
 
-        smf_map = SMFLinearKR(
-            mu_z=torch.zeros(B, m, device=device, dtype=dtype),          # (B,m)
-            mu_x=torch.zeros(B, 0, device=device, dtype=dtype),          # (B,0)
-            A=torch.zeros(B, m, 0, device=device, dtype=dtype),          # (B,m,0)
-            L=torch.eye(0, device=device, dtype=dtype).unsqueeze(0)      # (1,0,0)
-            .expand(B, 0, 0)
-            .contiguous(),
-            nonId_radius=0,
-            meta={"identity": True}
-        )
 
     return X_a, smf_map
 
@@ -1013,15 +1106,32 @@ def _enkf_pert_obs_analysis(
         Pyy = Pyy * localization_matrix_Lyy
     
 
+    I_obs = torch.eye(d_obs, device=device, dtype=dtype).unsqueeze(0)         # (1, d_obs, d_obs)
     if Gamma_Tildes is None:
-        if isinstance(sigma_y, torch.Tensor) and sigma_y.ndim == 1 and sigma_y.shape[0] == batch_size:
-            R_val = sigma_y.view(batch_size, 1, 1)**2
-            R_obs = torch.eye(d_obs, device=device, dtype=dtype).unsqueeze(0) * R_val
+        # sigma_y can be scalar (tensor/float) or (B,)
+        if isinstance(sigma_y, torch.Tensor):
+            if sigma_y.ndim == 0:
+                R_obs = (sigma_y**2) * I_obs.expand(batch_size, -1, -1)       # (B, d_obs, d_obs)
+            elif sigma_y.ndim == 1 and sigma_y.shape[0] == batch_size:
+                R_obs = (sigma_y.view(batch_size, 1, 1)**2) * I_obs           # (B, d_obs, d_obs)
+            else:
+                raise ValueError("sigma_y must be scalar or shape (B,).")
         else:
-            R_obs = (sigma_y**2) * torch.eye(d_obs, device=device, dtype=dtype)
-    
+            # python float
+            R_obs = (float(sigma_y)**2) * I_obs.expand(batch_size, -1, -1)    # (B, d_obs, d_obs)
     else:
-        R_obs = Gamma_Tildes.to(device=device, dtype=dtype)
+        # Gamma_Tildes can be (d_obs,d_obs) or (B,d_obs,d_obs)
+        if Gamma_Tildes.ndim == 2:
+            if Gamma_Tildes.shape != (d_obs, d_obs):
+                raise ValueError("Gamma_Tildes has wrong shape.")
+            R_obs = Gamma_Tildes.unsqueeze(0).expand(batch_size, -1, -1)      # (B, d_obs, d_obs)
+        elif Gamma_Tildes.ndim == 3:
+            if Gamma_Tildes.shape[0] != batch_size or Gamma_Tildes.shape[1:] != (d_obs, d_obs):
+                raise ValueError("Gamma_Tildes must be (B,d_obs,d_obs).")
+            R_obs = Gamma_Tildes.to(device=device, dtype=dtype)
+        else:
+            raise ValueError("Gamma_Tildes must be 2D or 3D.")
+
 
     # if not args.access_to_noise:
         # for each sigma_y in the inputted sigma_y_batch, we want to sample 64 times from each sigma y
@@ -1800,67 +1910,69 @@ def ensemble_kalman_filter_analysis(
     ienks_lag=1,
     ienks_niter=10,
     ienks_wtol=1e-5,
-    model_args=None,             # Dict for model propagator info needed by iEnKS
-    Gamma_Tilde=None,
+    model_args=None,            # Dict for model propagator info needed by iEnKS
+    Gamma_Tilde=None,           # None, (B, d_obs, d_obs), or per-valid-slice
     invalid_trajs=None,
 ):
     """
     Main dispatcher for ensemble Kalman filter analysis (Batched).
-    Now supports localized iEnKS.
+    Supports passing optional Gamma_Tilde and optional invalid_trajs.
+    Ensures we never index into None and only slice when needed.
     """
+    # Prepare validity mask
     if invalid_trajs is None:
-        invalid_trajs = torch.zeros(ensemble_f.shape[0], dtype=torch.bool, device=ensemble_f.device)
-    
-    if invalid_trajs is not None:
+        valid_mask = None
+    else:
         valid_mask = ~invalid_trajs
-        ensemble_f = ensemble_f[valid_mask]
-        observation_y = observation_y[valid_mask] if observation_y is not None else None
-    # if invalid_trajs is not None:
-    #     valid_mask = torch.ones(ensemble_f.shape[0], dtype=torch.bool, device=ensemble_f.device)
+
+    # Filter inputs for valid trajectories only if invalid_trajs provided
+    if valid_mask is not None:
+        ensemble_f_valid = ensemble_f[valid_mask]
+        observation_y_valid = observation_y[valid_mask] if observation_y is not None else None
+        Gamma_Tilde_valid = Gamma_Tilde[valid_mask] if (Gamma_Tilde is not None) else None
+    else:
+        ensemble_f_valid = ensemble_f
+        observation_y_valid = observation_y
+        Gamma_Tilde_valid = Gamma_Tilde
+
     kalman_gain_or_transform = None
-    ensemble_a_raw = None
-    _ensemble_a_raw = torch.full_like(ensemble_f, float('nan'))
-    # print(Gamma_Tilde)
-    if observation_y is None: # No observation, forecast is analysis
-        ensemble_a_raw = ensemble_f
+    ensemble_a_valid = None
+
+    # If no observation, analysis = forecast
+    if observation_y_valid is None:
+        ensemble_a_valid = ensemble_f_valid
+
     elif method == "EnKF-PertObs":
-        ensemble_a_raw, kalman_gain_or_transform = _enkf_pert_obs_analysis(
-            ensemble_f, observation_y, observation_operator_ens, sigma_y,
-            localization_matrix_Lxy, localization_matrix_Lyy, Gamma_Tilde[valid_mask]
+        ensemble_a_valid, kalman_gain_or_transform = _enkf_pert_obs_analysis(
+            ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y,
+            localization_matrix_Lxy, localization_matrix_Lyy, Gamma_Tilde_valid
         )
-        if invalid_trajs is not None:
-            _ensemble_a_raw[valid_mask] = ensemble_a_raw
-    elif method == "ESRF": # ETKF variant
-        ensemble_a_raw, kalman_gain_or_transform = _esrf_analysis(
-            ensemble_f, observation_y, observation_operator_ens, sigma_y, Gamma_Tilde[valid_mask]
+
+    elif method == "ESRF":  # ETKF variant
+        ensemble_a_valid, kalman_gain_or_transform = _esrf_analysis(
+            ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y, Gamma_Tilde_valid
         )
-        if invalid_trajs is not None:
-            _ensemble_a_raw[valid_mask] = ensemble_a_raw
+
     elif method == "LETKF":
-        if localization_radius is None or \
-            coords_state is None or \
-            coords_obs is None:
+        if (localization_radius is None) or (coords_state is None) or (coords_obs is None):
             raise ValueError("LETKF requires localization_radius, coords_state, and coords_obs.")
-        # print(sigma_y, sigma_y.shape)
-        ensemble_a_raw, kalman_gain_or_transform = _letkf_analysis(
-            ensemble_f, observation_y, observation_operator_ens, sigma_y,
-            localization_radius, coords_state,
-            coords_obs, localization_domain, Gamma_Tilde[valid_mask]
+        ensemble_a_valid, kalman_gain_or_transform = _letkf_analysis(
+            ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y,
+            localization_radius, coords_state, coords_obs, localization_domain, Gamma_Tilde_valid
         )
-        if invalid_trajs is not None:
-            _ensemble_a_raw[valid_mask] = ensemble_a_raw
+
     elif method.startswith("iEnKS"):
         if model_args is None:
             raise ValueError("iEnKS methods require 'model_args' dictionary.")
-        
         # Extract update type from method name, e.g., "iEnKS-Sqrt" -> "Sqrt"
         try:
             update_type = method.split('-', 1)[1]
         except IndexError:
             raise ValueError(f"Invalid iEnKS method format: {method}. Expected 'iEnKS-UpdateType'.")
-        ensemble_a_raw, kalman_gain_or_transform = _ienks_analysis(
-            # Standard DA args
-            ensemble_f, observation_y, observation_operator_ens, sigma_y, sigma_v,
+
+        ensemble_a_valid, kalman_gain_or_transform = _ienks_analysis(
+            # DA args
+            ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y, sigma_v,
             # Localization args
             localization_radius=localization_radius,
             coords_state=coords_state,
@@ -1876,73 +1988,24 @@ def ensemble_kalman_filter_analysis(
             Lag=ienks_lag,
             nIter=ienks_niter,
             wtol=ienks_wtol,
-            Gamma_Tildes=Gamma_Tilde[valid_mask]
+            Gamma_Tildes=Gamma_Tilde_valid
         )
-        _ensemble_a_raw = torch.full(
-            (len(invalid_trajs), ensemble_f.shape[1], ensemble_f.shape[2]),
-            float('nan'),
-            device=ensemble_f.device,
-            dtype=ensemble_f.dtype,
-        )
-
-        # Fill only valid trajectories
-        if invalid_trajs is not None:
-            valid_mask = ~invalid_trajs
-            _ensemble_a_raw[valid_mask] = ensemble_a_raw
     else:
         raise ValueError(f"Unknown EnKF method: {method}")
-    # if invalid_trajs is not None and valid_mask.any():
-    #     ensemble_a_raw[valid_mask] = ensemble_a_valid
-    # if smf_mode in ("replace", "post"):
-    #     obs_op = H if isinstance(H, torch.Tensor) else H_fun
-    #     obs_y_b = obs_y.squeeze(1) if (obs_y.ndim == 3 and obs_y.shape[1] == 1) else obs_y
 
-    #     sy = sigma_y_batch if ("sigma_y_batch" in locals() and sigma_y_batch is not None) else sigma_y
-
-    #     nonId = smf_nonId_radius if smf_nonId_radius is not None else ens_v_f.shape[-1]
-
-    #     if smf_mode == "replace":
-    #         # Use SMF instead of EnKF analysis
-    #         ensemble_a_raw, smf_map = stochastic_map_filter_analysis(
-    #             particles_forecast=ens_v_f,
-    #             observation_y=obs_y_b,
-    #             observation_operator=obs_op,
-    #             sigma_y=sy,
-    #             M=smf_M if smf_M is not None else ens_v_f.shape[1],
-    #             distMat=smf_distMat,
-    #             order_all=smf_order,
-    #             nonId_radius=nonId,
-    #             offdiag_rad=smf_offdiag_rad,
-    #             rho=smf_rho,
-    #             jitter=smf_jitter,
-    #         )
-    #         kalman_gain_or_transform = smf_map
-
-    #     elif smf_mode == "post":
-    #         # First EnKF, then refine with SMF; return the *final* transform as the SMF map.
-    #         ensemble_a_raw, smf_map = stochastic_map_filter_analysis(
-    #             particles_forecast=ens_v_a,
-    #             observation_y=obs_y_b,
-    #             observation_operator=obs_op,
-    #             sigma_y=sy,
-    #             M=smf_M if smf_M is not None else ens_v_a.shape[1],
-    #             distMat=smf_distMat,
-    #             order_all=smf_order,
-    #             nonId_radius=nonId,
-    #             offdiag_rad=smf_offdiag_rad,
-    #             rho=smf_rho,
-    #             jitter=smf_jitter,
-    #         )
-    #         # Optionally stash the base EnKF K/T as metadata for debugging
-    #         smf_map.meta["base_transform"] = "enkf"
-    #         smf_map.meta["enkf_transform_shape"] = tuple(x.shape for x in (K_or_T,) if hasattr(K_or_T, "shape"))
-    #         kalman_gain_or_transform = smf_map
-    # Apply inflation to the raw analysis ensemble
-    if invalid_trajs is not None:
+    # Reconstitute to full batch if we filtered
+    if valid_mask is not None:
+        B = ensemble_f.shape[0]
+        _ensemble_a_raw = torch.full_like(ensemble_f, float('nan'))
+        _ensemble_a_raw[valid_mask] = ensemble_a_valid
         ensemble_a_raw = _ensemble_a_raw
-    ensemble_analysis = apply_inflation(ensemble_a_raw, inflation_factor)
+    else:
+        ensemble_a_raw = ensemble_a_valid
 
+    # Apply inflation
+    ensemble_analysis = apply_inflation(ensemble_a_raw, inflation_factor)
     return ensemble_analysis, kalman_gain_or_transform
+
 
 
 # =======================================================================

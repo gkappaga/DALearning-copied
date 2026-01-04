@@ -1,4 +1,12 @@
 import os
+import os, torch
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.set_float32_matmul_precision("high")  # PyTorch 2.x
+
 
 import torch
 torch.backends.cudnn.deterministic = True
@@ -40,8 +48,8 @@ def get_benchmarks(args):
     method = args.v
     if method == 'SMF' or method == 'Affine-ydagger' or method == 'EnKF':
         method = 'EnKF_PertObs'
-    if method == 'ESRF':
-        method = 'LETKF'
+    if method == 'ESRF' or method == 'LETKF':
+        method = 'EnKF_PertObs'
     if method == 'iEnKS-PertObs':
         method = 'iEnKF_PertObs'
     if method == 'iEnKS-Sqrt':

@@ -1119,7 +1119,6 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
         dict: A dictionary containing mean and standard deviation of evaluation metrics.
     """
     m = args.N
-    print(args.dataset)
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
     elif args.dataset == "lorenz96":
@@ -1177,6 +1176,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
         'pf_rmse': torch.empty(0, device=args.device),
     }
 
+
     with torch.no_grad():
         for batch_ind, batch_v in enumerate(loader):
             print(f"Processing batch {batch_ind + 1}/{len(loader)}")
@@ -1209,14 +1209,6 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     obs_y_step += args.sigma_y * torch.randn_like(obs_y_step, device=args.device)
                     obs_y_list.append(obs_y_step)
             
-            
-            # obs_y = H_fun(batch_v[0].unsqueeze(1))
-            # if not args.random_noise:
-            #     obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
-            # else:
-            #     sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
-            #     obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
-            # obs_y_list = [obs_y]
 
             for i in range(len(batch_v) - 1):
                 print(f" Time step {i + 1}/{len(batch_v) - 1} ", end='\r')
@@ -1241,16 +1233,29 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 
                 
                 if args.access_to_H:
-                    Gammas = []
                     invalid_trajs = None
                     H = H.expand(B, H.shape[1], H.shape[2])
-                    if not args.access_to_noise:
+                    dtype = H.dtype
+
+                    if args.access_to_noise:
+                        # Case 1: access to H and to noise (σ_y per trajectory known)
+                        # Build Γ_b = σ_y(b)^2 * I_{obs_dim} for each batch element b
+                        sigma_vec = (sigma_y_batch.to(dtype))**2                      # (B,)
+                        sigma_vec = sigma_vec.unsqueeze(-1).expand(B, args.obs_dim)   # (B, obs_dim)
+                        Gammas = torch.diag_embed(sigma_vec).to(device=args.device)   # (B, obs_dim, obs_dim)
+
+                    else:
+                        # Case 2: access to H but NOT to noise (estimate Γ̃ via sampling)
+                        Gammas = torch.empty(B, args.obs_dim, args.obs_dim, device=args.device, dtype=dtype)
                         for traj in range(B):
-                            eta_samples = sigma_y_batch[traj] * torch.randn((args.N, args.obs_dim), device=args.device)
-                            Gamma_tilde = torch.cov(eta_samples.T, correction=1)
-                            Gammas.append(Gamma_tilde.view(args.obs_dim, args.obs_dim))
-                        Gammas = torch.stack(Gammas, dim=0)
+                            eta_samples = sigma_y_batch[traj].to(dtype) * torch.randn(
+                                (args.N, args.obs_dim), device=args.device, dtype=dtype
+                            )
+                            Gamma_tilde = torch.cov(eta_samples.T, correction=1)      # (obs_dim, obs_dim)
+                            Gammas[traj] = Gamma_tilde
+
                 else:
+                    # Case 3: NO access to H and NO access to noise (your existing logic — unchanged)
                     H_tildes = torch.full((B, args.obs_dim, args.ori_dim), float('nan'), device=args.device)
                     Gammas   = torch.full((B, args.obs_dim, args.obs_dim), float('nan'), device=args.device)
                     if i == 0:
@@ -1258,7 +1263,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     for traj in range(B):
                         if invalid_trajs[traj]:
                             continue
-                        v_ens = ens_v_f[traj] # (N_ens, D_state)
+                        v_ens = ens_v_f[traj]  # (N_ens, D_state)
                         y_samples = []
                         eta_samples = []
                         for n in range(args.N):
@@ -1280,18 +1285,18 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                         Gamma_tilde = torch.cov(residuals.T, correction=1)
                         H_tildes[traj] = H_tilde.to(torch.float32)
                         Gammas[traj]   = Gamma_tilde.to(torch.float32)
-                    # H_tildes = torch.stack(H_tildes, dim=0) if len(H_tildes) > 0 else None
-                    # Gammas = torch.stack(Gammas, dim=0) if len(Gammas) > 0 else None
-                # ensure Gammas is B x obs_dim x obs_dim
-                if Gammas is not None and Gammas.ndim == 2:
-                    Gammas = Gammas.expand(B, args.obs_dim, args.obs_dim)
-                elif Gammas is not None and Gammas.ndim == 1:
-                    # Fully scalar: (B,) → (B, 1, 1)
-                    Gammas = Gammas.view(-1, 1, 1)
-                #check if any element in all of Gammas is nan
-                if Gammas is not None:
-                    if invalid_trajs is not None and torch.isnan(Gammas[~invalid_trajs]).any():
+
+                # --- shape & NaN checks (light touch) ---
+                if isinstance(Gammas, torch.Tensor):
+                    if Gammas.ndim == 2:
+                        Gammas = Gammas.unsqueeze(0).expand(B, args.obs_dim, args.obs_dim)
+                    elif Gammas.ndim == 1:
+                        Gammas = Gammas.view(-1, 1, 1)
+
+                if Gammas is not None and invalid_trajs is not None:
+                    if torch.isnan(Gammas[~invalid_trajs]).any():
                         raise ValueError("NaN detected in Gammas matrix.")
+
                 def H_fun_tilde(v, H_tildes):
                     """
                     Applies the learned observation operator H_tilde to input v.
@@ -1392,7 +1397,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                         offdiag_rad=getattr(args, 'smf_offdiag_rad', None),
                         rho=getattr(args, 'smf_rho', 0.0),
                         jitter=getattr(args, 'smf_jitter', 1e-6),
-                        p_rbf=getattr(args, 'smf_p_rbf', 0)
+                        p_rbf=getattr(args, 'smf_rbf_p', 0)
                     )
 
                     # Backward compatibility: handle both 1-return and 2-return versions
@@ -1489,8 +1494,6 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 all_results['rmse'] = torch.cat((all_results['rmse'], rmse_val))
                 all_results['rmv'] = torch.cat((all_results['rmv'], rmv_val))
                 all_results['rrmse'] = torch.cat((all_results['rrmse'], rrmse_val))
-                print(rrmse_val)
-                print(sigma_y_batch)
                 all_results['crps'] = torch.cat((all_results['crps'], crps_val))
                 all_results['rcrps'] = torch.cat((all_results['rcrps'], rcrps_val))
                 if args.pf_verification:
