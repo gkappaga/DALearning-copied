@@ -4,9 +4,10 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils import L63, L96, rk4, etd_rk4_wrapper
-from utils import AverageMeter, mystery_operator, get_mean_std
+from utils import AverageMeter, mystery_operator, get_mean_std, partial_obs_operator
 from visualization import plot_particle_trajectories_with_histograms
 from EnKF_utils import loc_EnKF_analysis, EnKF_analysis, post_process, mean0
 from localization import dist2coeff, create_loc_mat
@@ -60,10 +61,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         t_start = time.time()
         batch_v = batch_v.to(device=args.device)
         B = batch_v.shape[1]  # number of trajectories
-        if args.random_noise:
-            sigma_y_batch = (
-                torch.rand(B, device=args.device) * (0.9) + 0.1
-            )
+        
         # Sample from prior
         ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
         ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -85,6 +83,11 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             running_orig_loss, running_mean_pen, running_cov_pen = 0., 0., 0.
         
         for i in range(end_ind):
+            # print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}] Step [{i+1}/{end_ind}]', end='\r')
+            if args.random_noise:
+                sigma_y_batch = (
+                    torch.rand(B, device=args.device) * (0.9) + 0.1
+                )
             # get next observation
             obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
             if not args.random_noise:
@@ -106,7 +109,20 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             ens_v_f = ens_v_f + torch.randn_like(ens_v_f, device=args.device) * args.sigma_v
 
             # preparation for individual ensemble data
-            hv = H_fun(ens_v_f)
+            # if args.random_H:
+            H_matrices = []
+            if args.random_h:
+                selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # [B, obs_dim]
+
+                # H as [B, obs_dim, ori_dim] (each row picks a coordinate)
+                H = F.one_hot(selected_inds, num_classes=args.ori_dim).to(ens_v_f.dtype)  # [B, obs_dim, ori_dim]
+
+                # If you want H as [B, ori_dim, obs_dim], transpose:
+                H_matrices = H.transpose(1, 2)  # [B, ori_dim, obs_dim]
+                hv = torch.bmm(ens_v_f, H_matrices)
+            else:
+                hv = H_fun(ens_v_f)
+            # hv = H_fun(ens_v_f)
             B, N, D = ens_v_f.shape
             d = hv.shape[2]
             

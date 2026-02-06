@@ -1,1218 +1,905 @@
-import math
-from typing import Callable, List, Optional, Sequence, Tuple, Union
+"""
+Stochastic Map Filter (SMF) - Python Port
+Based on Baptista, Spantini, and Marzouk (2019)
+"Coupling Techniques for Nonlinear Ensemble Filtering"
+
+This module provides a Python implementation of the stochastic map filter
+for data assimilation, ported from the original MATLAB code.
+"""
 
 import torch
-
-Tensor = torch.Tensor
-
-import time
-import torch
-
-def _maybe_sync(device):
-    # Needed for accurate timing on GPU due to async kernels.
-    if device.type == "cuda":
-        torch.cuda.synchronize(device=device)
-
-
-def _as_2d(x: Tensor) -> Tensor:
-    if x.ndim == 1:
-        return x[:, None]
-    return x
-
-
-def quantiles_sorted_vector(x_sorted: Tensor, n_or_q: Union[int, Sequence[float]]) -> Tensor:
-    """
-    Replacement for MATLAB quantiles_sorted_vector used by your code.
-
-    x_sorted MUST be sorted ascending. Shape (N,) or (N,1).
-    n_or_q:
-      - int n: internal quantiles at i/(n+1), i=1..n
-      - list/tuple: explicit quantiles in [0,1]
-    """
-    x_sorted = x_sorted.flatten()
-    n = x_sorted.numel()
-
-    if isinstance(n_or_q, int):
-        if n_or_q <= 0:
-            return x_sorted.new_zeros((0,))
-        q = torch.arange(1, n_or_q + 1, device=x_sorted.device, dtype=torch.float32) / (n_or_q + 1.0)
-    else:
-        q = torch.tensor(list(n_or_q), device=x_sorted.device, dtype=torch.float32)
-
-    idx = q * (n - 1)
-    lo = torch.floor(idx).to(torch.long)
-    hi = torch.clamp(lo + 1, max=n - 1)
-    w = (idx - lo.to(idx.dtype))
-    return (1.0 - w) * x_sorted[lo] + w * x_sorted[hi]
-
-
-# def projected_newton_nonneg(
-#     x0: Tensor,
-#     obj: Callable[[Tensor], Tuple[Tensor, Tensor, Tensor]],
-#     max_iter: int = 50,
-#     tol: float = 1e-8,
-#     ls_max_iter: int = 25,
-#     ls_c: float = 1e-4,
-#     ls_tau: float = 0.5,
-#     # new:
-#     damp0: float = 1e-10,
-#     damp_max: float = 1e8,
-#     symmetrize_H: bool = True,
-# ) -> Tensor:
-#     """
-#     Projected Newton on nonnegative orthant with robust damped solve.
-#     obj(x) -> (f, g, H)
-#     """
-#     x = torch.clamp(x0.clone(), min=0.0)
-
-#     for _ in range(max_iter):
-#         f, g, H = obj(x)
-
-#         # projected gradient
-#         pg = torch.where((x <= 0) & (g > 0), torch.zeros_like(g), g)
-#         if torch.linalg.norm(pg).item() < tol:
-#             break
-
-#         if symmetrize_H:
-#             H = 0.5 * (H + H.transpose(-1, -2))
-
-#         I = torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
-
-#         # --- robust damped Newton direction ---
-#         # Try increasing diagonal shift until solve succeeds.
-#         damp = damp0
-#         p = None
-#         while True:
-#             try:
-#                 p = torch.linalg.solve(H + damp * I, -g)
-#                 break
-#             except RuntimeError:
-#                 damp *= 10.0
-#                 if damp > damp_max:
-#                     # Last resort: least-squares direction
-#                     p = torch.linalg.lstsq(H + damp0 * I, -g).solution
-#                     break
-
-#         # line search
-#         alpha = 1.0
-#         gTp = (g * p).sum()
-#         for _ls in range(ls_max_iter):
-#             x_new = torch.clamp(x + alpha * p, min=0.0)
-#             f_new, _, _ = obj(x_new)
-#             if f_new <= f + ls_c * alpha * gTp:
-#                 x = x_new
-#                 break
-#             alpha *= ls_tau
-#         else:
-#             x = torch.clamp(x + alpha * p, min=0.0)
-
-#     return x
-
-def projected_newton_nonneg(
-    x0: Tensor,
-    obj_fgh: Callable[[Tensor], Tuple[Tensor, Tensor, Tensor]],
-    obj_f: Callable[[Tensor], Tensor],
-    max_iter: int = 50,
-    tol: float = 1e-8,
-    ls_max_iter: int = 25,
-    ls_c: float = 1e-4,
-    ls_tau: float = 0.5,
-    ridge: float = 1e-8,
-) -> Tensor:
-    """
-    Projected Newton in nonnegative orthant.
-    Key speed fix: line search evaluates ONLY f(x_new), not (f,g,H).
-    """
-    x = torch.clamp(x0.clone(), min=0.0)
-
-    I = None  # allocate lazily once
-
-    for _ in range(max_iter):
-        f, g, H = obj_fgh(x)
-
-        # projected gradient norm
-        pg = torch.where((x <= 0) & (g > 0), torch.zeros_like(g), g)
-        if torch.linalg.norm(pg).item() < tol:
-            break
-
-        if I is None or I.shape[0] != H.shape[0] or I.device != H.device or I.dtype != H.dtype:
-            I = torch.eye(H.shape[0], device=H.device, dtype=H.dtype)
-
-        # Newton direction with ridge that grows if needed
-        p = None
-        r = ridge
-        for _try in range(6):
-            try:
-                p = torch.linalg.solve(H + r * I, -g)
-                break
-            except RuntimeError:
-                r *= 10.0
-        if p is None:
-            # fallback: least-squares direction
-            p = torch.linalg.lstsq(H + r * I, -g).solution
-
-        # Armijo backtracking using f-only
-        alpha = 1.0
-        gTp = (g * p).sum()
-
-        for _ls in range(ls_max_iter):
-            x_new = torch.clamp(x + alpha * p, min=0.0)
-            f_new = obj_f(x_new)
-            if f_new <= f + ls_c * alpha * gTp:
-                x = x_new
-                break
-            alpha *= ls_tau
-        else:
-            x = torch.clamp(x + alpha * p, min=0.0)
-
-    return x
-
-
-
-
-class NonMonotonePart:
-    """
-    Faithful port of NonMonotonePart.m
-    """
-
-    def __init__(self, order: Sequence[int], scalingRbf: float = 2.0):
-        self.order = list(order)
-        self.scalingRbf = float(scalingRbf)
-
-        self.nvar = len(self.order)
-        self.activeVars = [i for i, o in enumerate(self.order) if o > 0]
-        self.ncoeff = int(sum(max(o, 0) for o in self.order))
-
-        self.constTerm = torch.tensor(0.0)
-        self.coeffs: List[Optional[Tensor]] = [None] * self.nvar
-        self.centers: List[Optional[Tensor]] = [None] * self.nvar
-        self.widths: List[Optional[Tensor]] = [None] * self.nvar
-
-    def reset_coeffs(self, device=None, dtype=None):
-        device = device or torch.device("cpu")
-        dtype = dtype or torch.float32
-        self.constTerm = torch.zeros((), device=device, dtype=dtype)
-        for i in range(self.nvar):
-            o = self.order[i]
-            self.coeffs[i] = torch.zeros((o,), device=device, dtype=dtype) if o > 0 else None
-
-    def centers_and_widths(self, X: Tensor, ncoeff: int) -> Tuple[Tensor, Tensor]:
-        """
-        MATLAB-faithful centers_and_widths:
-        - sort X
-        - centers from quantiles_sorted_vector(X_sorted, ncoeff)
-        - widths per MATLAB rules
-        - widths scaled by scalingRbf
-        Returns:
-          centers: (P,)
-          widths:  (P,)
-        """
-        x = X.flatten().to(torch.float32)
-        if x.numel() == 0:
-            c = x.new_zeros((0,))
-            w = x.new_zeros((0,))
-            return c, w
-
-        if ncoeff < 1:
-            raise ValueError("ncoeff must be >= 1")
-
-        x_sorted = torch.sort(x)[0]
-
-        if ncoeff == 1:
-            # qq = quantiles_sorted_vector(X,[.25, .5, .75]);
-            qq = quantiles_sorted_vector(x_sorted, [0.25, 0.50, 0.75]).to(torch.float32)
-            centers = qq[1:2]  # (1,)
-            widths = ((qq[2] - qq[0]) / 2.0).reshape(1)
-        else:
-            # centers = quantiles_sorted_vector(X, ncoeff);
-            centers = quantiles_sorted_vector(x_sorted, ncoeff).to(torch.float32)  # (P,)
-            P = centers.numel()
-            if P == 2:
-                w0 = (centers[1] - centers[0]).abs()
-                widths = w0.expand(2).clone()
-            else:
-                widths = centers.new_zeros((P,))
-                widths[1:-1] = (centers[2:] - centers[:-2]) / 2.0
-                widths[0] = centers[1] - centers[0]
-                widths[-1] = centers[-1] - centers[-2]
-
-        # scale the widths by scalingRbf
-        widths = self.scalingRbf * widths
-
-        # MATLAB implicitly assumes widths > 0; protect against exact duplicates
-        # (this is the *minimal* safety guard; it preserves the MATLAB formula)
-        widths = widths.clamp_min(1e-12)
-
-        return centers, widths
-
-    def _eval_rbf(self, X: Tensor, centers: Tensor, widths: Tensor) -> Tensor:
-        X = X[:, None].to(torch.float32)
-        c = centers[None, :].to(torch.float32)
-        w = widths[None, :].to(torch.float32).clamp_min(1e-12)
-        return torch.exp(-0.5 * ((X - c) / w) ** 2) / (w * math.sqrt(2.0 * math.pi))
-
-
-
-    def setup(self, X: Tensor):
-        X = _as_2d(X)
-
-        # init coeffs ONCE (or if device changes) — warm-start thereafter
-        if (self.constTerm.device != X.device) or (self.coeffs[0] is None):
-            self.reset_coeffs(device=X.device, dtype=torch.float32)
-
-        # centers/widths depend on X; you can recompute them each time OR cache them
-        for i in self.activeVars:
-            o = self.order[i]
-            if o >= 2:
-                c, w = self.centers_and_widths(X[:, i], o - 1)
-                self.centers[i] = c.to(device=X.device, dtype=torch.float32)
-                self.widths[i]  = w.to(device=X.device, dtype=torch.float32)
-
-
-    # def _eval_rbf(self, X: Tensor, centers: Tensor, widths: Tensor) -> Tensor:
-    #     X = X[:, None]
-    #     c = centers[None, :]
-    #     w = widths[None, :]
-    #     return torch.exp(-0.5 * ((X - c) / w) ** 2)
-
-    def basis_eval(self, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        cols = []
-        for i in self.activeVars:
-            o = self.order[i]
-            xi = X[:, i]
-            cols.append(xi[:, None])  # linear term
-            if o >= 2:
-                cols.append(self._eval_rbf(xi, self.centers[i], self.widths[i]))
-        if not cols:
-            return X.new_zeros((X.shape[0], 0), dtype=torch.float32)
-        return torch.cat(cols, dim=1)
-
-    def invalidate_cache(self):
-        for i in self.activeVars:
-            self.centers[i] = None
-            self.widths[i] = None
-
-    def eval(self, X: Tensor) -> Tensor:
-        X = _as_2d(X)
-        Psi = self.basis_eval(X)
-        g_list = []
-        for i in self.activeVars:
-            g_list.append(self.coeffs[i].to(torch.float32))
-        if not g_list:
-            return self.constTerm.expand(X.shape[0]).to(torch.float32)
-        g = torch.cat(g_list, dim=0)
-        return (Psi @ g + self.constTerm).to(torch.float32)
+import numpy as np
+from scipy import stats
+from typing import Optional, Tuple, Callable, Union
 
 
 class MonotonePart:
     """
-    Faithful port of MonotonePart.m
+    Univariate nonlinear and monotone function parametrized using
+    a linear term and RBFs.
+
+    order = 1: linear
+    order > 1: (order-1) RBFs + 2 erf functions
     """
 
-    def __init__(
-        self,
-        order: int,
-        scalingRbf: float = 2.0,
-        approx_inverse_npts: int = 250,
-    ):
-        self.order = int(order)
-        self.scalingRbf = float(scalingRbf)
-        self.approx_inverse_npts = int(approx_inverse_npts)
-        self.kappa = 5.0
-        self.npoints_interp = 250
+    def __init__(self, d: int, order: int, scaling_rbf: float = 2.0,
+                 kappa: float = 4.0, npoints_interp: int = 2000):
+        if d != 1:
+            raise ValueError("MonotonePart should be one-dimensional.")
+        if order <= 0:
+            raise ValueError("Order must be greater than 0.")
 
-        self.ncoeff = 1 if self.order == 1 else (self.order + 1)
-        self.coeffs: Optional[Tensor] = None
-        self.centers: Optional[Tensor] = None
-        self.widths: Optional[Tensor] = None
-        self.xx: Optional[Tensor] = None
-        self.yy: Optional[Tensor] = None
-    
-    def invalidate_cache(self):
+        self.d = d
+        self.order = order
+        self.scaling_rbf = scaling_rbf
+        self.kappa = kappa
+        self.npoints_interp = npoints_interp
+
+        self.coeffs = None
         self.centers = None
         self.widths = None
-        self.xx = None
-        self.yy = None
 
-    def reset(self, device=None, dtype=None, clear_cache: bool = False):
-        device = device or torch.device("cpu")
-        dtype = dtype or torch.float32
-        self.coeffs = torch.zeros((self.ncoeff,), device=device, dtype=dtype)
-        if clear_cache:
+    def ncoeff(self) -> int:
+        """Number of coefficients in the basis."""
+        if self.order == 1:
+            return 1
+        else:
+            return (self.order - 1) + 2
+
+    def set_id_function(self):
+        """Set to identity map."""
+        # NOTE: keep as CPU float by default; we move to X.device/X.dtype at evaluate time.
+        self.coeffs = torch.tensor([1.0])
+        self.widths = None
+        self.centers = None
+
+    def construct_basis(self, X: torch.Tensor):
+        """Construct basis functions from samples."""
+        if X.shape[1] != 1:
+            raise ValueError("Samples should be a column vector.")
+
+        if self.order == 1:
             self.centers = None
             self.widths = None
-            self.xx = None
-            self.yy = None
+        else:
+            self.centers, self.widths = self._centers_and_widths(X, self.ncoeff())
 
-    def centers_and_widths(self, X: Tensor, ncoeff: Union[int, Sequence[float]]) -> Tuple[Tensor, Tensor]:
-        """
-        Robust centers/widths:
-        - centers from quantiles
-        - if quantiles duplicate, fall back to evenly spaced centers over [min,max]
-        - widths from mean center spacing, with a lower bound based on data scale
-        """
-        x = X.flatten().to(torch.float32)
-        if x.numel() == 0:
-            c = x.new_zeros((0,))
-            w = x.new_ones((0,))
-            return c, w
+    def _centers_and_widths(self, X: torch.Tensor, ncoeff: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        X_sorted = torch.sort(X.flatten())[0]
+        dev = X_sorted.device
+        dt = X_sorted.dtype
 
-        # --- centers ---
-        if isinstance(ncoeff, int):
-            P = int(ncoeff)
-            if P <= 0:
-                c = x.new_zeros((0,))
+        if ncoeff == 1:
+            qq = torch.quantile(
+                X_sorted,
+                torch.tensor([0.25, 0.5, 0.75], device=dev, dtype=dt)
+            )
+            centers = qq[1:2]
+            widths = ((qq[2] - qq[0]) / 2).reshape(1)
+        else:
+            quantiles = torch.linspace(0, 1, ncoeff + 2, device=dev, dtype=dt)[1:-1]
+            centers = torch.quantile(X_sorted, quantiles)
+
+            widths = torch.zeros(ncoeff, device=dev, dtype=dt)
+            if ncoeff == 2:
+                widths[:] = centers[1] - centers[0]
             else:
-                q = torch.arange(1, P + 1, device=x.device, dtype=torch.float32) / (P + 1.0)
-                c = torch.quantile(x, q, interpolation="linear")
-        else:
-            q = torch.tensor(list(ncoeff), device=x.device, dtype=torch.float32)
-            c = torch.quantile(x, q, interpolation="linear")
-            P = c.numel()
+                widths[1:-1] = (centers[2:] - centers[:-2]) / 2
+                widths[0] = centers[1] - centers[0]
+                widths[-1] = centers[-1] - centers[-2]
 
-        if P == 0:
-            return c, x.new_zeros((0,))
+        widths = self.scaling_rbf * widths
+        widths = widths.clamp_min(1e-6)
+        return centers, widths
 
-        # If quantile centers are not strictly increasing, replace with linspace centers
-        x_min = x.min()
-        x_max = x.max()
-        rng = (x_max - x_min).abs()
-
-        # detect duplicates / non-increasing centers
-        if P > 1:
-            dc = c[1:] - c[:-1]
-            if not torch.all(dc > 0):
-                if rng.item() == 0.0:
-                    # constant variable: all centers identical
-                    c = x_min.expand_as(c).clone()
-                else:
-                    # strictly increasing centers inside (min,max)
-                    c = torch.linspace(x_min, x_max, P + 2, device=x.device, dtype=torch.float32)[1:-1]
-
-        # --- widths ---
-        if P == 1:
-            base = x.new_tensor(1.0)
-        else:
-            dc = c[1:] - c[:-1]
-            base = dc.mean()
-
-        # lower bound based on scale of x
-        # (these are small but prevent w=0 and therefore 0/0)
-        std = x.std(unbiased=False)
-        eps_scale = torch.maximum(
-            x.new_tensor(1e-12),
-            torch.maximum(1e-6 * rng, 1e-3 * std),
-        )
-
-        w = (self.scalingRbf * base).expand_as(c).clone()
-        w = torch.clamp(w, min=float(eps_scale.item()))
-        return c, w
-
-
-
-    def _eval_monotone_rbfs(self, X: Tensor, centers: Tensor, widths: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-        """
-        MATLAB-faithful version of:
-        eval_monotone_rbfs
-        grad_x_monotone_rbfs
-        hess_x_monotone_rbfs
-
-        centers, widths are 1D tensors of length P = self.ncoeff (>=3 when order>1)
-        X is (N,) or (N,1)
-        """
-        X = X.reshape(-1, 1).to(torch.float32)              # (N,1)
-        c = centers.reshape(1, -1).to(torch.float32)        # (1,P)
-        w = widths.reshape(1, -1).to(torch.float32)         # (1,P)
-
-        # guard widths (MATLAB assumes positive)
-        w = w.clamp_min(1e-12)
-
-        delta = (X - c) / (w * math.sqrt(2.0))              # (N,P)
-        erf_d = torch.erf(delta)
-        exp_d = torch.exp(-(delta ** 2))
-
-        N, P = delta.shape
-        if P < 3:
-            raise ValueError(f"MATLAB MonotonePart requires >=3 centers/widths when order>1; got P={P}")
-
-        sqrt2 = math.sqrt(2.0)
-        sqrt2_over_pi = math.sqrt(2.0 / math.pi)
-        inv_sqrt2pi = 1.0 / math.sqrt(2.0 * math.pi)
-
-        f = X.new_zeros((N, P), dtype=torch.float32)
-        df = X.new_zeros((N, P), dtype=torch.float32)
-        d2f = X.new_zeros((N, P), dtype=torch.float32)
-
-        # ---- f (MATLAB eval_monotone_rbfs) ----
-        # f(:,1)
-        f[:, 0] = 0.5 * (
-            sqrt2 * w[:, 0] * delta[:, 0] * (1.0 - erf_d[:, 0])
-            - w[:, 0] * sqrt2_over_pi * exp_d[:, 0]
-        )
-        # f(:,2:end-1)
-        f[:, 1:-1] = 0.5 * (1.0 + erf_d[:, 1:-1])
-        # f(:,end)
-        f[:, -1] = 0.5 * (
-            sqrt2 * w[:, -1] * delta[:, -1] * (1.0 + erf_d[:, -1])
-            + w[:, -1] * sqrt2_over_pi * exp_d[:, -1]
-        )
-
-        # ---- df (MATLAB grad_x_monotone_rbfs) ----
-        df[:, 0] = 0.5 * (1.0 - erf_d[:, 0])
-        df[:, 1:-1] = exp_d[:, 1:-1] / (w[:, 1:-1] * math.sqrt(2.0 * math.pi))
-        df[:, -1] = 0.5 * (1.0 + erf_d[:, -1])
-
-        # ---- d2f (MATLAB hess_x_monotone_rbfs) ----
-        d2f[:, 0] = -exp_d[:, 0] / (w[:, 0] * math.sqrt(2.0 * math.pi))
-        df_mid = exp_d[:, 1:-1] / (w[:, 1:-1] * math.sqrt(2.0 * math.pi))
-        d2f[:, 1:-1] = -df_mid * delta[:, 1:-1] * math.sqrt(2.0) / w[:, 1:-1]
-        d2f[:, -1] = exp_d[:, -1] / (w[:, -1] * math.sqrt(2.0 * math.pi))
-
-        return f, df, d2f
-
-
-    def basis_eval(self, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        x = X[:, 0]
+    def basis_eval(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate basis functions."""
         if self.order == 1:
-            return x[:, None]
-        if self.centers is None or self.widths is None:
-            c, w = self.centers_and_widths(x, self.ncoeff)
-            self.centers = c.to(device=x.device)
-            self.widths = w.to(device=x.device)
-        f, _, _ = self._eval_monotone_rbfs(x, self.centers, self.widths)
+            return X
+        else:
+            return self._eval_monotone_rbfs(X, self.centers, self.widths)
+
+    def basis_grad(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of basis functions."""
+        if self.order == 1:
+            return torch.ones_like(X)
+        else:
+            return self._grad_x_monotone_rbfs(X, self.centers, self.widths)
+
+    def _eval_monotone_rbfs(self, X: torch.Tensor, centers: torch.Tensor,
+                            widths: torch.Tensor) -> torch.Tensor:
+        """Evaluate monotone RBF basis functions."""
+        N = X.shape[0]
+        ncoeff = len(centers)
+
+        # Centered inputs
+        deltaX = (X - centers.unsqueeze(0)) / (widths.unsqueeze(0) * np.sqrt(2))
+
+        # Evaluate basis functions
+        f = torch.zeros(N, ncoeff, device=X.device, dtype=X.dtype)
+
+        # First basis (left boundary)
+        erf_vals = torch.erf(deltaX[:, 0])
+        exp_vals = torch.exp(-deltaX[:, 0] ** 2)
+        f[:, 0] = 0.5 * (np.sqrt(2) * widths[0] * deltaX[:, 0] * (1 - erf_vals)
+                         - widths[0] * np.sqrt(2 / np.pi) * exp_vals)
+
+        # Middle bases
+        if ncoeff > 2:
+            f[:, 1:-1] = 0.5 * (1 + torch.erf(deltaX[:, 1:-1]))
+
+        # Last basis (right boundary)
+        erf_vals_end = torch.erf(deltaX[:, -1])
+        exp_vals_end = torch.exp(-deltaX[:, -1] ** 2)
+        f[:, -1] = 0.5 * (np.sqrt(2) * widths[-1] * deltaX[:, -1] * (1 + erf_vals_end)
+                          + widths[-1] * np.sqrt(2 / np.pi) * exp_vals_end)
+
         return f
 
-    def basis_grad_x(self, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        x = X[:, 0]
-        if self.order == 1:
-            return torch.ones((x.shape[0], 1), device=x.device, dtype=torch.float32)
-        if self.centers is None or self.widths is None:
-            c, w = self.centers_and_widths(x, self.ncoeff)
-            self.centers = c.to(device=x.device)
-            self.widths = w.to(device=x.device)
-        _, df, _ = self._eval_monotone_rbfs(x, self.centers, self.widths)
+    def _grad_x_monotone_rbfs(self, X: torch.Tensor, centers: torch.Tensor,
+                              widths: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of monotone RBF basis functions."""
+        N = X.shape[0]
+        ncoeff = len(centers)
+
+        deltaX = (X - centers.unsqueeze(0)) / (widths.unsqueeze(0) * np.sqrt(2))
+
+        df = torch.zeros(N, ncoeff, device=X.device, dtype=X.dtype)
+
+        # First basis
+        df[:, 0] = 0.5 * (1 - torch.erf(deltaX[:, 0]))
+
+        # Middle bases
+        if ncoeff > 2:
+            df[:, 1:-1] = torch.exp(-deltaX[:, 1:-1] ** 2) / (
+                widths[1:-1].unsqueeze(0) * np.sqrt(2 * np.pi)
+            )
+
+        # Last basis
+        df[:, -1] = 0.5 * (1 + torch.erf(deltaX[:, -1]))
+
         return df
 
-    def basis_hess_x(self, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        x = X[:, 0]
+    def _ensure_coeffs_on(self, ref: torch.Tensor):
+        if self.coeffs is None:
+            raise RuntimeError("MonotonePart.coeffs is None. Did you call set_id_function() or optimize()?")
+
+        if self.coeffs.device != ref.device or self.coeffs.dtype != ref.dtype:
+            self.coeffs = self.coeffs.to(device=ref.device, dtype=ref.dtype)
+
+    def evaluate(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate the monotone function."""
+        self._ensure_coeffs_on(X)
+        return self.basis_eval(X) @ self.coeffs
+
+    def grad_x(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of the monotone function."""
+        self._ensure_coeffs_on(X)
+        return self.basis_grad(X) @ self.coeffs
+
+    def inverse(self, Z: torch.Tensor) -> torch.Tensor:
+        """Invert the monotone function using interpolation."""
+        self._ensure_coeffs_on(Z)
+
         if self.order == 1:
-            return torch.zeros((x.shape[0], 1), device=x.device, dtype=torch.float32)
-        if self.centers is None or self.widths is None:
-            c, w = self.centers_and_widths(x, self.ncoeff)
-            self.centers = c.to(device=x.device)
-            self.widths = w.to(device=x.device)
-        _, _, d2f = self._eval_monotone_rbfs(x, self.centers, self.widths)
-        return d2f
-
-    @torch.no_grad()
-    def inverse(self, y: Tensor, X: Tensor, coeffs: Optional[Tensor] = None) -> Tensor:
-        y = y.flatten().to(torch.float32)
-        X = _as_2d(X).to(torch.float32)
-        x_samples = X[:, 0]
-        device = x_samples.device
-
-        coeffs = coeffs if coeffs is not None else self.coeffs
-        assert coeffs is not None
-
-        # Build (xx, yy) lookup table if needed
-        rebuild = (self.xx is None) or (self.yy is None) or (self.xx.device != device)
-        if rebuild:
-            # MATLAB domain:
+            return Z / self.coeffs[0]
+        else:
+            # Define interpolation domain
             lbound = self.centers[0] - self.kappa * self.widths[0]
             ubound = self.centers[-1] + self.kappa * self.widths[-1]
-            xx = torch.linspace(lbound, ubound, self.npoints_interp, device=device, dtype=torch.float32)
-            yy = self.basis_eval(xx[:, None]) @ coeffs.to(torch.float32)
-            self.xx, self.yy = xx, yy
+            xx_interp = torch.linspace(
+                lbound, ubound, self.npoints_interp, device=Z.device, dtype=Z.dtype
+            ).unsqueeze(1)
 
-        xx, yy = self.xx, self.yy
+            # Evaluate function at interpolation points
+            Psi_mon = self._eval_monotone_rbfs(xx_interp, self.centers.to(Z.device), self.widths.to(Z.device))
+            yy_interp = Psi_mon @ self.coeffs
 
-        # Enforce nondecreasing yy in xx-order (fix tiny numerical violations)
-        yy_mono = torch.cummax(yy, dim=0).values
+            # Invert using linear interpolation
+            return self._invert_1d_map_interp(Z, xx_interp.squeeze(), yy_interp)
 
-        # If yy is (almost) flat, inversion is ill-posed -> do NOT collapse the ensemble
-        y_range = (yy_mono[-1] - yy_mono[0]).abs()
-        if y_range < 1e-8:
-            # safest fallback: identity-ish (return original samples)
-            # If you prefer: return x_samples.mean().expand_as(y) for a deterministic scalar
-            return x_samples.clone()
+    def _invert_1d_map_interp(self, points: torch.Tensor, xx: torch.Tensor,
+                              yy: torch.Tensor) -> torch.Tensor:
+        """Invert 1D monotone map using linear interpolation."""
+        points_flat = points.flatten()
 
-        # Make it strictly increasing to keep searchsorted stable on plateaus
-        eps = 1e-12 * torch.arange(yy_mono.numel(), device=device, dtype=torch.float32)
-        yy_mono = yy_mono + eps
+        # Find bracketing indices
+        indices = torch.searchsorted(yy, points_flat)
+        indices = torch.clamp(indices, 1, len(yy) - 1)
 
-        
-        # Clamp and invert via linear interpolation
-        y_clamped = torch.clamp(y, min=yy_mono[0].item(), max=yy_mono[-1].item())
-        idx = torch.searchsorted(yy_mono, y_clamped, right=False)
-        idx = torch.clamp(idx, 1, yy_mono.numel() - 1)
+        ind_min = indices - 1
+        ind_plus = indices
 
-        y0, y1 = yy_mono[idx - 1], yy_mono[idx]
-        x0, x1 = xx[idx - 1], xx[idx]
-        t = (y_clamped - y0) / (y1 - y0 + 1e-12)
-        return x0 + t * (x1 - x0)
+        # Linear interpolation
+        denom = (yy[ind_plus] - yy[ind_min]).clamp_min(1e-12)
+        delta = (points_flat - yy[ind_min]) / denom
+        interp_values = (1 - delta) * xx[ind_min] + delta * xx[ind_plus]
 
+        return interp_values.reshape(points.shape)
+
+
+class NonMonotonePart:
+    """
+    Non-monotone function parametrized using linear functions and RBFs.
+
+    order = 0: inactive variable
+    order = 1: linear
+    order >= 2: linear + RBF
+    """
+
+    def __init__(self, d: int, order: torch.Tensor, scaling_rbf: float = 2.0):
+        self.d = d
+        self.order = order if isinstance(order, torch.Tensor) else torch.tensor(order)
+        self.scaling_rbf = scaling_rbf
+
+        self.active_vars = torch.where(self.order > 0)[0]
+
+        self.const_term = 0.0
+        self.coeffs = [None] * d
+        self.centers = [None] * d
+        self.widths = [None] * d
+
+    def ncoeff(self) -> int:
+        """Total number of coefficients."""
+        return int(self.order.sum().item())
+
+    def set_zero_function(self):
+        """Set to zero function."""
+        self.const_term = 0.0
+        total_coeffs = self.ncoeff()
+        if total_coeffs > 0:
+            # Keep on CPU by default; moved to X.device/X.dtype at evaluate time.
+            self.coeffs = [torch.zeros(total_coeffs)]
+
+    def construct_basis(self, X: torch.Tensor):
+        """Construct basis functions from samples."""
+        if X.shape[1] != self.d:
+            raise ValueError("Dimension mismatch")
+
+        for ii in self.active_vars:
+            order_ii = int(self.order[ii].item())
+            if order_ii == 1:
+                self.centers[ii] = None
+                self.widths[ii] = None
+            else:
+                centers, widths = self._centers_and_widths(X[:, ii:ii + 1], order_ii - 1)
+                self.centers[ii] = centers
+                self.widths[ii] = widths
+
+    def _centers_and_widths(self, X: torch.Tensor, ncoeff: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute centers and widths of RBF basis using quantiles."""
+        X_sorted = torch.sort(X.flatten())[0]
+        dev = X_sorted.device
+        dt = X_sorted.dtype
+
+        if ncoeff == 1:
+            qq = torch.quantile(
+                X_sorted,
+                torch.tensor([0.25, 0.5, 0.75], device=dev, dtype=dt)
+            )
+            centers = qq[1:2]
+            widths = ((qq[2] - qq[0]) / 2).unsqueeze(0)
+        else:
+            quantiles = torch.linspace(0, 1, ncoeff + 2, device=dev, dtype=dt)[1:-1]
+            centers = torch.quantile(X_sorted, quantiles)
+
+            widths = torch.zeros(ncoeff, device=dev, dtype=dt)
+            if ncoeff == 2:
+                widths[:] = centers[1] - centers[0]
+            else:
+                widths[1:-1] = (centers[2:] - centers[:-2]) / 2
+                widths[0] = centers[1] - centers[0]
+                widths[-1] = centers[-1] - centers[-2]
+
+        widths = self.scaling_rbf * widths
+        widths = widths.clamp_min(1e-6)
+        return centers, widths
+
+    def _eval_rbf(self, X: torch.Tensor, centers: torch.Tensor,
+                  widths: torch.Tensor) -> torch.Tensor:
+        """Evaluate Gaussian RBF basis functions."""
+        return torch.exp(-((X - centers.unsqueeze(0)) / widths.unsqueeze(0)) ** 2 / 2) / \
+            (widths.unsqueeze(0) * np.sqrt(2 * np.pi))
+
+    def _grad_x_rbf(self, X: torch.Tensor, centers: torch.Tensor,
+                    widths: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of Gaussian RBF basis functions."""
+        r = self._eval_rbf(X, centers, widths)
+        return r * (-1) * ((X - centers.unsqueeze(0)) / widths.unsqueeze(0) ** 2)
+
+    def basis_eval(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate all basis functions."""
+        N = X.shape[0]
+
+        # Handle case when there are no dimensions
+        if self.d == 0 or X.shape[1] == 0 or self.ncoeff() == 0:
+            return torch.zeros(N, 0, device=X.device, dtype=X.dtype)
+
+        basis_eval = torch.zeros(N, self.ncoeff(), device=X.device, dtype=X.dtype)
+
+        counter = 0
+        for ii in self.active_vars:
+            order_ii = int(self.order[ii].item())
+            samples_ii = X[:, ii:ii + 1]
+
+            if order_ii == 1:
+                basis_eval[:, counter] = samples_ii.squeeze()
+                counter += 1
+            else:
+                centers = self.centers[ii].to(device=X.device, dtype=X.dtype)
+                widths = self.widths[ii].to(device=X.device, dtype=X.dtype)
+                rbf_eval = self._eval_rbf(samples_ii, centers, widths)
+                basis_eval[:, counter:counter + order_ii] = torch.cat([samples_ii, rbf_eval], dim=1)
+                counter += order_ii
+
+        return basis_eval
+
+    def basis_grad(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of all basis functions."""
+        N = X.shape[0]
+        grad_eval = torch.zeros(N, self.d, self.ncoeff(), device=X.device, dtype=X.dtype)
+
+        counter = 0
+        for ii in self.active_vars:
+            order_ii = int(self.order[ii].item())
+            samples_ii = X[:, ii:ii + 1]
+
+            if order_ii == 1:
+                grad_eval[:, ii, counter] = 1.0
+                counter += 1
+            else:
+                centers = self.centers[ii].to(device=X.device, dtype=X.dtype)
+                widths = self.widths[ii].to(device=X.device, dtype=X.dtype)
+                rbf_grad = self._grad_x_rbf(samples_ii, centers, widths)
+                grad_eval[:, ii, counter] = 1.0
+                grad_eval[:, ii, counter + 1:counter + order_ii] = rbf_grad
+                counter += order_ii
+
+        return grad_eval
+
+    def evaluate(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate the non-monotone function."""
+        # Handle case when there are no off-diagonal dimensions
+        if self.d == 0 or X.shape[1] == 0 or self.ncoeff() == 0:
+            return torch.full((X.shape[0],), float(self.const_term), device=X.device, dtype=X.dtype)
+
+        coeffs_list = [c for c in self.coeffs if c is not None]
+        if len(coeffs_list) == 0:
+            return torch.full((X.shape[0],), float(self.const_term), device=X.device, dtype=X.dtype)
+
+        coeffs_list = [c.to(device=X.device, dtype=X.dtype) for c in coeffs_list]
+        coeffs_flat = torch.cat(coeffs_list)
+
+        const = torch.tensor(float(self.const_term), device=X.device, dtype=X.dtype)
+        return self.basis_eval(X) @ coeffs_flat + const
+
+    def grad_x(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of the non-monotone function."""
+        if X.shape[1] == 0 or self.ncoeff() == 0:
+            return torch.zeros(X.shape[0], self.d, device=X.device, dtype=X.dtype)
+
+        coeffs_list = [c for c in self.coeffs if c is not None]
+        if len(coeffs_list) == 0:
+            return torch.zeros(X.shape[0], self.d, device=X.device, dtype=X.dtype)
+
+        coeffs_list = [c.to(device=X.device, dtype=X.dtype) for c in coeffs_list]
+        coeffs_flat = torch.cat(coeffs_list)
+
+        grad_basis = self.basis_grad(X)
+        return torch.einsum('ndk,k->nd', grad_basis, coeffs_flat)
 
 
 class TransportMapComponent:
     """
-    Faithful port of TransportMapComponent.m
+    Component of a triangular transport map with non-monotone off-diagonal
+    and monotone diagonal parts.
     """
 
-    def __init__(self, order: Sequence[int], lambda_: float = 0.0, delta: float = 1e-8, scalingRbf: float = 2.0):
-        self.order = list(order)
-        self.d = len(order)
-        self.lambda_ = float(lambda_)
-        self.delta = float(delta)
-        self.scalingRbf = float(scalingRbf)
+    def __init__(self, d: int, order: list, options: dict):
+        self.d = d
+        self.order = order
 
-        self.OffD_nvar = self.d - 1
-        self.Diag_nvar = 1
+        # Create off-diagonal and diagonal components
+        self.off_d = NonMonotonePart(d - 1, torch.tensor(order[:-1]),
+                                     scaling_rbf=options.get('scalingWidths', 2.0))
+        self.diag = MonotonePart(1, order[-1],
+                                 scaling_rbf=options.get('scalingWidths', 2.0),
+                                 kappa=options.get('kappa', 4.0),
+                                 npoints_interp=options.get('npoints_interp', 2000))
 
-        self.OffD = NonMonotonePart(self.order[: self.OffD_nvar], scalingRbf=self.scalingRbf) if self.OffD_nvar > 0 else None
-        self.Diag = MonotonePart(self.order[-1], scalingRbf=self.scalingRbf)
-        self.Diag.reset()
+        self.lambda_ = options.get('lambda', 0.0)
+        self.delta = options.get('delta', 1e-8)
 
-    def invalidate_cache(self):
-        # invalidate cache for off-diagonal basis (depends on current X)
-        if self.OffD is not None:
-            self.OffD.invalidate_cache()
-        # invalidate cache for diagonal basis + inverse table (depends on current x_k)
-        self.Diag.invalidate_cache()
+    def ncoeff(self) -> int:
+        """Total number of coefficients."""
+        return self.off_d.ncoeff() + self.diag.ncoeff()
 
-    @torch.no_grad()
-    def eval(self, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        xk = X[:, -1:]
-        Psi_mon = self.Diag.basis_eval(xk)
-        y = Psi_mon @ self.Diag.coeffs.to(X.device, dtype=torch.float32)
-        if self.OffD_nvar > 0:
-            y = y + self.OffD.eval(X[:, :-1])
-        return y
-    @torch.no_grad()
-    def optimize(self, X: Tensor):
-        """
-        MATLAB-faithful TransportMapComponent.optimize.
+    def set_id_comp(self):
+        """Set to identity component."""
+        self.off_d.set_zero_function()
+        self.diag.set_id_function()
 
-        Matches:
-        - construct_basis() behavior (centers/widths recomputed from current X)
-        - Psi_mon / dPsi_mon normalization with population std
-        - QR projection using [Psi_offD; sqrt(lambda) I]
-        - A formation from projected residual Asqrt
-        - setup_and_run_optim objective structure
-        - g_off = -R\(Q1' * Psi_mon * g_mon)
-        - rescaling + constTerm exactly as MATLAB
-        """
-        X = _as_2d(X)
-        device = X.device
-        X = X.to(torch.float32)
+    def evaluate(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate map component."""
+        if X.shape[1] != self.d:
+            raise ValueError("Dimension mismatch")
+        return self.off_d.evaluate(X[:, :-1]) + self.diag.evaluate(X[:, -1:])
+
+    def inverse(self, X: torch.Tensor, Z: torch.Tensor) -> torch.Tensor:
+        """Invert map component."""
+        s_off_d = self.off_d.evaluate(X)
+        return self.diag.inverse(Z - s_off_d.unsqueeze(1))
+
+    def grad_x(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of map component."""
+        grad_off = self.off_d.grad_x(X[:, :-1])
+        grad_diag = self.diag.grad_x(X[:, -1:])
+        return torch.cat([grad_off, grad_diag], dim=1)
+
+    def optimize(self, X: torch.Tensor):
+        """Optimize component parameters using nonlinear regression."""
         N = X.shape[0]
 
-        if X.shape[1] != self.d:
-            raise ValueError(f"Dimension mismatch: got X.shape[1]={X.shape[1]} but component d={self.d}")
+        # Construct and evaluate basis functions
+        self.diag.construct_basis(X[:, -1:])
+        psi_mon = self.diag.basis_eval(X[:, -1:])
+        dpsi_mon = self.diag.basis_grad(X[:, -1:])
 
-        # -------------------------
-        # Build diagonal (monotone) basis from CURRENT x_k  (MATLAB construct_basis)
-        # -------------------------
-        xk = X[:, -1:]  # (N,1)
+        # Normalize monotone basis
+        mean_psi = psi_mon.mean(dim=0, keepdim=True)
+        std_psi = psi_mon.std(dim=0, keepdim=True, unbiased=False).clamp_min(1e-8)
+        psi_mon = (psi_mon - mean_psi) / std_psi
+        dpsi_mon = dpsi_mon / std_psi
 
-        if self.Diag.coeffs is None or self.Diag.coeffs.numel() != self.Diag.ncoeff or self.Diag.coeffs.device != device:
-            self.Diag.reset(device=device, dtype=torch.float32, clear_cache=True)
+        Q1 = None
+        R = None
+        mean_x = None
+        std_x = None
+        psi_off_d = None
 
-        if self.Diag.order > 1:
-            c, w = self.Diag.centers_and_widths(xk[:, 0], self.Diag.ncoeff)
-            # MATLAB expects row vectors; we store 1D tensors
-            self.Diag.centers = c.to(device=device, dtype=torch.float32)
-            self.Diag.widths  = w.to(device=device, dtype=torch.float32)
-            # also invalidate inverse table since centers/widths changed
-            self.Diag.xx = None
-            self.Diag.yy = None
+        if self.d > 1:
+            # Construct off-diagonal basis
+            self.off_d.construct_basis(X[:, :-1])
+            psi_off_d = self.off_d.basis_eval(X[:, :-1])
 
-        Psi_mon  = self.Diag.basis_eval(xk)       # (N, p)
-        dPsi_mon = self.Diag.basis_grad_x(xk)     # (N, p)
-        p = Psi_mon.shape[1]
-
-        # Normalize monotone basis (MATLAB: mean=sum/N, std=sqrt(sum((.)^2)/N))
-        meanPsi = Psi_mon.mean(dim=0, keepdim=True)
-        stdPsi  = ( (Psi_mon - meanPsi).pow(2).mean(dim=0, keepdim=True) ).sqrt()
-        # MATLAB can divide by zero if a basis column is constant; prevent NaNs with minimal deviation
-        stdPsi  = stdPsi.clamp_min(1e-12)
-
-        Psi_mon_std  = (Psi_mon - meanPsi) / stdPsi
-        dPsi_mon_std = dPsi_mon / stdPsi
-
-        # -------------------------
-        # Off-diagonal basis + QR projection (MATLAB exact)
-        # -------------------------
-        if self.OffD_nvar != 0:
-            assert self.OffD is not None
-            self.OffD.setup(X[:, :-1])  # recompute centers/widths from CURRENT offdiag samples
-            Psi_offD = self.OffD.basis_eval(X[:, :-1])  # (N, q)
-            q = Psi_offD.shape[1]
-
-            meanX = Psi_offD.mean(dim=0, keepdim=True)
-            stdX  = ( (Psi_offD - meanX).pow(2).mean(dim=0, keepdim=True) ).sqrt().clamp_min(1e-12)
-            Psi_offD_std = (Psi_offD - meanX) / stdX
-
-            # QR on [Psi_offD_std; sqrt(lambda)*I]  (MATLAB: qr(...,0))
-            if q > 0:
-                Aqr = torch.cat(
-                    [Psi_offD_std, math.sqrt(self.lambda_) * torch.eye(q, device=device, dtype=torch.float32)],
-                    dim=0
-                )  # (N+q, q)
-
-                Q, R = torch.linalg.qr(Aqr, mode="reduced")  # Q:(N+q,q), R:(q,q)
-                Q1 = Q[:N, :]                                # first N rows
-
-                Asqrt = Psi_mon_std - Q1 @ (Q1.T @ Psi_mon_std)
-                A = (Asqrt.T @ Asqrt) / float(N)
+            # ---- FIX: avoid std() warning / NaNs when there are 0 off-diagonal columns ----
+            if psi_off_d.shape[1] == 0:
+                # Purely diagonal fit
+                A = (psi_mon.T @ psi_mon) / N
             else:
-                # degenerate offdiag
-                meanX = Psi_mon_std.new_zeros((1, 0))
-                stdX  = Psi_mon_std.new_ones((1, 0))
-                R = None
-                Q1 = None
-                A = (Psi_mon_std.T @ Psi_mon_std) / float(N)
+                # Normalize off-diagonal basis
+                mean_x = psi_off_d.mean(dim=0, keepdim=True)
+                std_x = psi_off_d.std(dim=0, keepdim=True, unbiased=False).clamp_min(1e-8)
+                psi_off_d = (psi_off_d - mean_x) / std_x
+
+                # QR decomposition for least squares
+                lambda_reg = torch.sqrt(torch.tensor(self.lambda_, device=X.device, dtype=X.dtype))
+                psi_aug = torch.cat([
+                    psi_off_d,
+                    lambda_reg * torch.eye(psi_off_d.shape[1], device=X.device, dtype=X.dtype)
+                ], dim=0)
+
+                Q, R = torch.linalg.qr(psi_aug)
+                Q1 = Q[:N, :]
+
+                A_sqrt = psi_mon - Q1 @ (Q1.T @ psi_mon)
+                A = (A_sqrt.T @ A_sqrt) / N
         else:
-            meanX = None
-            stdX  = None
-            q = 0
-            R = None
-            Q1 = None
-            A = (Psi_mon_std.T @ Psi_mon_std) / float(N)
+            A = (psi_mon.T @ psi_mon) / N
 
-        # -------------------------
-        # Solve diagonal coefficients (MATLAB)
-        # -------------------------
-        if self.Diag.order == 1:
-            # A should be scalar
-            a00 = A.reshape(-1)[0].clamp_min(1e-18)
-            g_mon = torch.sqrt(1.0 / a00).reshape(1)  # (1,)
+        # Optimize diagonal component
+        if self.diag.order == 1:
+            g_mon = torch.sqrt(1.0 / A).squeeze()
+            g_mon = g_mon.unsqueeze(0) if g_mon.dim() == 0 else g_mon
         else:
-            # MATLAB setup_and_run_optim:
-            # A = A + (lambda/N)*I ; b = delta*sum(A,2) ; projectedNewton ; xopt = xopt + delta
-            I = torch.eye(p, device=device, dtype=torch.float32)
-            A_reg = A + (self.lambda_ / float(N)) * I
-            b = self.delta * A_reg.sum(dim=1)
+            x0 = torch.ones(self.diag.ncoeff(), device=X.device, dtype=X.dtype)
+            g_mon = self._projected_newton(A, dpsi_mon, x0)
 
-            dPsi_sum = dPsi_mon_std.sum(dim=1)
+        # Compute off-diagonal coefficients
+        if self.d > 1 and (Q1 is not None):
+            rhs = (Q1.T @ psi_mon @ g_mon).unsqueeze(1)
+            g_off = -torch.linalg.solve_triangular(R, rhs, upper=True).squeeze(1)
 
-            def obj_fgh(xvec: Tensor):
-                Ax = A_reg @ xvec
-                dS = (dPsi_mon_std @ xvec) + self.delta * dPsi_sum
-                dS = dS.clamp_min(1e-20)
+            # Rescale coefficients
+            g_mon = g_mon / std_psi.squeeze()
+            g_off = g_off / std_x.squeeze()
 
-                fx = 0.5 * (xvec @ Ax) - torch.sum(torch.log(dS)) / float(N) + (xvec @ b)
+            const_term = -mean_psi @ g_mon - mean_x @ g_off
 
-                dPsi_dS = dPsi_mon_std / dS[:, None]
-                gx = Ax - dPsi_dS.sum(dim=0) / float(N) + b
-
-                Hx = A_reg + (dPsi_dS.T @ dPsi_dS) / float(N)
-                Hx = 0.5 * (Hx + Hx.T)  # tiny symmetrization for numeric stability
-                return fx, gx, Hx
-
-            def obj_f(xvec: Tensor):
-                Ax = A_reg @ xvec
-                dS = (dPsi_mon_std @ xvec) + self.delta * dPsi_sum
-                dS = dS.clamp_min(1e-20)
-                fx = 0.5 * (xvec @ Ax) - torch.sum(torch.log(dS)) / float(N) + (xvec @ b)
-                return fx
-
-            if (self.Diag.coeffs is not None
-                and self.Diag.coeffs.numel() == p
-                and torch.isfinite(self.Diag.coeffs).all()):
-                g_prev_std = (self.Diag.coeffs * stdPsi.flatten()).clamp_min(self.delta)
-                x0 = torch.clamp(g_prev_std - self.delta, min=0.0)
-            else:
-                x0 = torch.ones((p,), device=device, dtype=torch.float32)
-            xopt = projected_newton_nonneg(
-                x0, obj_fgh, obj_f,
-                max_iter=15, tol=1e-6,
-                ls_max_iter=25, ls_c=1e-4, ls_tau=0.5,
-                ridge=1e-12
-            )
-            g_mon = xopt + self.delta  # MATLAB: xopt = xopt + delta
-
-        # -------------------------
-        # Solve off-diagonal coefficients (MATLAB: g_off = -R\(Q1' * Psi_mon * g_mon))
-        # -------------------------
-        if self.OffD_nvar != 0 and q > 0:
-            # v = Q1' * (Psi_mon_std * g_mon)
-            v = Q1.T @ (Psi_mon_std @ g_mon)  # (q,)
-            # Solve R g_off = v  (R is upper triangular)
-            g_off = -torch.linalg.solve_triangular(R, v[:, None], upper=True).squeeze(1)  # (q,)
-
-            # rescale to original coordinates
-            g_mon = g_mon / stdPsi.flatten()
-            g_off = g_off / stdX.flatten()
-
-            constTerm = -(meanPsi.flatten() @ g_mon) - (meanX.flatten() @ g_off)
-
+            # Store coefficients
+            self.off_d.coeffs = [g_off]
+            self.off_d.const_term = const_term.item()
         else:
-            # only diagonal
-            g_mon = g_mon / stdPsi.flatten()
-            g_off = None
-            constTerm = -(meanPsi.flatten() @ g_mon)
+            # No off-diagonal regressors active (or d==1)
+            g_mon = g_mon / std_psi.squeeze()
+            const_term = -mean_psi @ g_mon
+            # keep a benign empty coeff tensor to avoid later cat/device issues
+            self.off_d.coeffs = [torch.empty(0, device=X.device, dtype=X.dtype)]
+            self.off_d.const_term = const_term.item()
 
-        # -------------------------
-        # Write back coefficients exactly like MATLAB assigns
-        # -------------------------
-        self.Diag.coeffs = g_mon.to(device=device, dtype=torch.float32)
+        self.diag.coeffs = g_mon.to(device=X.device, dtype=X.dtype)
 
-        if self.OffD_nvar != 0:
-            if self.OffD.coeffs[0] is None or self.OffD.constTerm.device != device:
-                self.OffD.reset_coeffs(device=device, dtype=torch.float32)
+    def _projected_newton(self, A: torch.Tensor, dpsi_mon: torch.Tensor,
+                          x0: torch.Tensor, max_iter: int = 100,
+                          tol: float = 1e-6) -> torch.Tensor:
+        """Projected Newton method for optimization."""
+        N = dpsi_mon.shape[0]
+        nbasis = A.shape[0]
 
-            if g_off is not None:
-                counter = 0
-                for i in self.OffD.activeVars:
-                    o = self.OffD.order[i]
-                    self.OffD.coeffs[i][:] = g_off[counter:counter + o]
-                    counter += o
+        if x0.dim() != 1:
+            raise ValueError(f"x0 must be 1D, got shape {x0.shape}")
+        if x0.shape[0] != nbasis:
+            raise ValueError(f"x0 must have length {nbasis}, got {x0.shape[0]}")
 
-            self.OffD.constTerm = constTerm.to(device=device, dtype=torch.float32)
+        # Add regularization
+        A_reg = A + (self.lambda_ / N) * torch.eye(nbasis, device=A.device, dtype=A.dtype)
+        b = self.delta * A_reg.sum(dim=1)
 
+        x = x0.clone()
 
-    @torch.no_grad()
-    def inverse(self, y: Tensor, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        y = y.flatten().to(torch.float32)
-        if self.OffD_nvar > 0:
-            y_tilde = y - self.OffD.eval(X[:, :-1])
-        else:
-            y_tilde = y
-        xk = self.Diag.inverse(y_tilde, X[:, -1:], coeffs=self.Diag.coeffs)
-        Xinv = X.clone()
-        Xinv[:, -1] = xk
-        return Xinv
+        for _ in range(max_iter):
+            Ax = A_reg @ x
+
+            dpsi_x = dpsi_mon @ x
+            dpsi_sum = dpsi_mon.sum(dim=1)
+            dS = (dpsi_x + self.delta * dpsi_sum).unsqueeze(1)
+
+            # Gradient
+            dpsi_dS = dpsi_mon / dS
+            g = Ax - dpsi_dS.sum(dim=0) / N + b
+
+            # Hessian
+            weights = 1.0 / (dS * dS)
+            weighted_dpsi = dpsi_mon * weights
+            H = A_reg + (dpsi_mon.T @ weighted_dpsi) / N
+
+            # Newton step with projection
+            try:
+                delta_x = -torch.linalg.solve(H, g)
+            except Exception:
+                delta_x = -g / (torch.diag(H) + 1e-8)
+
+            alpha = 1.0
+            x_new = torch.clamp(x + alpha * delta_x, min=0)
+
+            if torch.norm(x_new - x) < tol:
+                x = x_new
+                break
+
+            x = x_new
+
+        return x + self.delta
 
 
 class TransportMap:
     """
-    Faithful port of TransportMap.m
+    Triangular transport map composed of multiple components.
     """
 
-    def __init__(self, order, lambda_=0.0, delta=1e-8, scalingRbf=2.0):
-        self.order = [list(o) for o in order]
-        self.d = len(self.order)
+    def __init__(self, d: int, order: list, options: dict):
+        self.d = d
+        self.order = order
+        self.S = [TransportMapComponent(k + 1, order[k], options) for k in range(d)]
 
-        # Enforce MATLAB triangular structure: len(order[k]) == k+1
+    def optimize(self, X: torch.Tensor, non_id_comp: list):
+        """Optimize non-identity components of the map."""
+        for ck in non_id_comp:
+            self.S[ck].optimize(X[:, :ck + 1])
+
+    def eval_map(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate forward map."""
+        Z = torch.zeros_like(X)
         for k in range(self.d):
-            if len(self.order[k]) != (k + 1):
-                raise ValueError(f"order[{k}] must have length {k+1}, got {len(self.order[k])}")
-
-        self.Components = [
-            TransportMapComponent(self.order[k], lambda_=lambda_, delta=delta, scalingRbf=scalingRbf)
-            for k in range(self.d)
-        ]
-
-    @torch.no_grad()
-    def optimize(self, X: Tensor, nonIdComp: Optional[Sequence[int]] = None):
-        X = _as_2d(X).to(torch.float32)
-        nonIdComp = list(nonIdComp) if nonIdComp is not None else list(range(1, self.d + 1))
-        for k1 in nonIdComp:  # MATLAB-style 1-based
-            self.Components[k1 - 1].optimize(X[:, :k1])
-
-    @torch.no_grad()
-    def eval_map(self, X: Tensor) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        Z = X.new_zeros((X.shape[0], self.d), dtype=torch.float32)
-        for k in range(self.d):
-            Z[:, k] = self.Components[k].eval(X[:, :k + 1]).flatten()
+            Z[:, k] = self.S[k].evaluate(X[:, :k + 1]).squeeze()
         return Z
 
-    @torch.no_grad()
-    def inverse_map(self, Z: Tensor, X0: Optional[Tensor] = None) -> Tensor:
-        Z = _as_2d(Z).to(torch.float32)
-
-        if X0 is None:
-            # MATLAB-faithful: start from zeros
-            X = Z.new_zeros((Z.shape[0], self.d), dtype=torch.float32)
-        else:
-            X = _as_2d(X0).to(torch.float32).clone()
-
+    def eval_inv_map(self, Z: torch.Tensor) -> torch.Tensor:
+        """Evaluate inverse map."""
+        X = torch.zeros_like(Z)
         for k in range(self.d):
-            X[:, :k + 1] = self.Components[k].inverse(Z[:, k], X[:, :k + 1])
+            X[:, k] = self.S[k].inverse(X[:, :k], Z[:, k:k + 1]).squeeze()
         return X
 
-    def invalidate_cache(self):
-        for comp in self.Components:
-            comp.invalidate_cache()
+    def grad_x(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate gradient of map."""
+        N = X.shape[0]
+        dSx = torch.zeros(N, self.d, self.d, device=X.device, dtype=X.dtype)
+
+        for k in range(self.d):
+            grad_k = self.S[k].grad_x(X[:, :k + 1])
+            dSx[:, k, :k + 1] = grad_k
+
+        return dSx
 
 
-
-class StochasticMapFilterPy:
+class StochasticMapFilter:
     """
-    Port of the high-level logic in StochasticMapFilter.m (scalar-sequential assimilation).
+    Stochastic Map Filter for data assimilation using transport maps.
     """
 
-    def __init__(
-        self,
-        distMat: Optional[Tensor],
-        offdiag_rad: float,
-        order_all: int,
-        diag_order: int,
-        nonId_radius: int,
-        lambda_: float = 0.0,
-        delta: float = 1e-8,
-        scalingRbf: float = 2.0,
-        M: Optional[int] = None,
-    ):
-        self.distMat = distMat
-        self.offdiag_rad = float(offdiag_rad)
-        self.order_all = int(order_all)
-        self.diag_order = int(diag_order)
-        self.nonId_radius = int(nonId_radius)
-        self.lambda_ = float(lambda_)
-        self.delta = float(delta)
-        self.scalingRbf = float(scalingRbf)
-        self.M = M
-        self.TM: Optional[TransportMap] = None
+    def __init__(self, model: dict, options: dict):
+        self.model = model
+        self.options = self._setup_default_options(options)
 
-    def _generate_realizations(self, N: int, M: int, device) -> Tensor:
-        if M >= N:
-            return torch.arange(N, device=device)
+    def _setup_default_options(self, options: dict) -> dict:
+        """Set default options for the filter."""
+        defaults = {
+            'scalingWidths': 2.0,
+            'lambda': 0.0,
+            'delta': 1e-8,
+            'kappa': 4.0,
+            'npoints_interp': max(2000, 2 * options.get('M', 100)),
+            'locLik': 1,
+        }
 
-        # if you really need without-replacement and M close to N:
-        if M > 0.5 * N:
-            return torch.randperm(N, device=device)[:M]
+        for key, value in defaults.items():
+            if key not in options:
+                options[key] = value
 
-        # otherwise: with-replacement is fine and massively faster
-        return torch.randint(0, N, (M,), device=device)
+        # Set order defaults
+        order_all = options.get('order_all', 2)
+        options['data_order'] = options.get('data_order', order_all)
+        options['offdiag_order'] = options.get('offdiag_order', order_all)
+        options['diag_order_obs'] = options.get('diag_order_obs', order_all)
+        options['diag_order_unobs'] = options.get('diag_order_unobs', 1)
 
+        return options
 
-    def _apply_H(self, X: Tensor, H: Union[Tensor, Callable[[Tensor], Tensor]]) -> Tensor:
-        if callable(H):
-            Y = H(X)
-            if isinstance(Y, (tuple, list)):
-                Y = Y[0]
-            if Y.dim() == 3 and Y.shape[0] == 1:
-                Y = Y.squeeze(0)
-            elif Y.dim() == 3 and Y.shape[1] == 1:
-                Y = Y.squeeze(1)
-            return _as_2d(Y).to(torch.float32)
+    def _setup_tmap_for_obs(self, data_idx: int) -> Tuple[list, list, torch.Tensor]:
+        """
+        Build transport map structure for assimilating a scalar observation y of state x[data_idx].
 
-        Ht = torch.as_tensor(H, device=X.device, dtype=torch.float32)
-        if Ht.ndim != 2:
-            raise ValueError("H must be 2D matrix or callable")
-        if Ht.shape[1] == X.shape[1]:
-            return X.to(torch.float32) @ Ht.T
-        if Ht.shape[0] == X.shape[1]:
-            return X.to(torch.float32) @ Ht
-        raise ValueError(f"H has incompatible shape {Ht.shape} for state dim {X.shape[1]}")
+        The transport map is over the joint vector [y, x_perm] of dimension (1 + d_state),
+        where x_perm is the state permuted so that the observed variable is first among the states.
+        """
+        d_state = self.model['d']
+        dist_mat = self.options['distMat']
 
-    def _build_order(self, K: int, distMatK: Optional[Tensor]) -> List[List[int]]:
-        # component 1: y only
-        order: List[List[int]] = [[self.diag_order]]
+        # --- Build a robust state permutation: put the observed index first ---
+        # Use CPU long indices for safe indexing of CUDA tensors.
+        if dist_mat is None or dist_mat.numel() == 0:
+            permutation_state = torch.tensor(
+                [data_idx] + [i for i in range(d_state) if i != data_idx],
+                device=torch.device("cpu"),
+                dtype=torch.long
+            )
+        else:
+            permutation_state = torch.argsort(dist_mat[data_idx, :]).to(device="cpu", dtype=torch.long)
+            if permutation_state[0].item() != data_idx:
+                rest = permutation_state[permutation_state != data_idx]
+                permutation_state = torch.cat(
+                    [torch.tensor([data_idx], device=torch.device("cpu"), dtype=torch.long), rest],
+                    dim=0
+                )
 
-        if distMatK is None:
-            for i in range(1, K + 1):
-                deps = [self.order_all] + [self.order_all] * (i - 1) + [self.diag_order]
-                order.append(deps)
-            return order
+        # Permute distance matrix in the permuted state coordinates (state-only, not including y)
+        dist_mat_perm = dist_mat[permutation_state, :][:, permutation_state]
 
-        for i in range(1, K + 1):
-            deps = [self.order_all]
-            if i > 1:
-                drow = distMatK[i - 1, : i - 1]
-                deps += [self.order_all if float(drow[j].item()) <= self.offdiag_rad else 0 for j in range(i - 1)]
-            deps.append(self.diag_order)
-            order.append(deps)
-        return order
+        offdiag_order = int(self.options['offdiag_order'])
+        offdiag_rad = int(self.options['offdiag_rad'])
+        nonid_radius = int(self.options['nonId_radius'])
 
-    def sample_posterior(
-        self,
-        X: Tensor,                          # (N,d)
-        y: Tensor,                          # (m,)
-        H: Union[Tensor, Callable[[Tensor], Tensor]],
-        sigma_y: Union[float, Tensor],
-        perm: Optional[Tensor] = None,
-    ) -> Tensor:
-        X = _as_2d(X).to(torch.float32)
-        y = y.flatten().to(torch.float32)
-        N, d = X.shape
+        # dist_to_order[r] = what order to use for off-diagonal dependence at distance r
+        dist_to_order = [offdiag_order] * offdiag_rad + [0] * max(0, d_state - offdiag_rad)
 
-        K = min(self.nonId_radius, d)
-        perm = torch.arange(d, device=X.device) if perm is None else perm.to(torch.long)
-        Xp = X[:, perm]
-        Xsub = Xp[:, :K]
+        order: list = []
+        non_id_comp: list = []
 
-        Y_pred = self._apply_H(X, H)  # (N,m)
-        m = Y_pred.shape[1]
+        # Total dimension is D = 1 + d_state: variable 0 is y; variables 1..d_state are states.
+        # Component 0: y is identity (MATLAB behavior)
+        order.append([1])
+        # do NOT add 0 to non_id_comp
 
-        distMatK = None
-        if self.distMat is not None:
-            Dfull = self.distMat.to(device=X.device, dtype=torch.float32)
-            Dperm = Dfull[perm][:, perm]
-            distMatK = Dperm[:K, :K]
-        
-        order = self._build_order(K, distMatK)
-        TM = TransportMap(order, lambda_=self.lambda_, delta=self.delta, scalingRbf=self.scalingRbf)
-        
-        for j in range(m):
-            yj = y[j]
-            sigma_j = float(sigma_y[j].item()) if isinstance(sigma_y, torch.Tensor) and sigma_y.numel() > 1 else float(sigma_y)
+        # Component 1: observed state depends on y and itself: [y, x_obs]
+        order.append([self.options['data_order'], self.options['diag_order_obs']])
+        non_id_comp.append(1)
 
-            M = self.M or N
-            idx = self._generate_realizations(N, M, device=X.device)
-            Yj_synth = Y_pred[idx, j] + float(sigma_j) * torch.randn((M,), device=X.device, dtype=torch.float32)
-            mapInput = torch.cat([Yj_synth[:, None], Xsub[idx]], dim=1)  # (M,K+1)
+        # Components 2..d_state: remaining state variables in permuted order
+        for p in range(1, d_state):
+            comp_idx = p + 1  # because 0 is y, 1 is observed state
 
-            
+            dist_p_to_obs = dist_mat_perm[p, 0].item()
 
-            if j == 0:
-                TM.invalidate_cache()
-            
-            TM.optimize(mapInput, nonIdComp=list(range(1, K + 2)))
+            if dist_p_to_obs <= nonid_radius:
+                orders_p = [0] * (comp_idx + 1)
 
-            mapOutput = TM.eval_map(mapInput)
-            mapOutput[:, 0] = yj
-            mapInput_post = TM.inverse_map(mapOutput, mapInput)
-            Xsub[idx] = mapInput_post[:, 1:]
+                # Dependence on y
+                if self.options.get('locLik', 1) == 1:
+                    orders_p[0] = 0
+                else:
+                    orders_p[0] = self.options['data_order']
 
-            self.TM = TM
+                # Dependence on previous states
+                for q in range(0, p):
+                    dist_p_q = int(dist_mat_perm[p, q].item())
+                    if dist_p_q < len(dist_to_order):
+                        orders_p[1 + q] = dist_to_order[dist_p_q]
 
-        Xp[:, :K] = Xsub
-        invperm = torch.argsort(perm)
-        return Xp[:, invperm].to(dtype=X.dtype)
+                # Diagonal order for this (unobserved) state
+                orders_p[comp_idx] = self.options['diag_order_unobs']
 
-    def sample_posterior(
-        self,
-        X: torch.Tensor,                          # (N,d)
-        y: torch.Tensor,                          # (m,)
-        H,                                        # Tensor or callable
-        sigma_y,
-        perm: Optional[Tensor] = None,
-        *,
-        timing: bool = True,
-        timing_every_j: int = 1,                  # print every j (set to 5/10 to reduce spam)
-    ) -> torch.Tensor:
-        X = _as_2d(X).to(torch.float32)
-        y = y.flatten().to(torch.float32)
-        N, d = X.shape
-        device = X.device
-
-        def stamp():
-            _maybe_sync(device)
-            return time.perf_counter()
-
-        t0_total = stamp()
-
-        # -----------------------
-        # Setup / permute
-        # -----------------------
-        t0 = stamp()
-        K = min(self.nonId_radius, d)
-        perm = torch.arange(d, device=device) if perm is None else perm.to(torch.long)
-        Xp = X[:, perm]
-        Xsub = Xp[:, :K]
-        t_setup = stamp() - t0
-
-        # -----------------------
-        # Apply H once
-        # -----------------------
-        t0 = stamp()
-        Y_pred = self._apply_H(X, H)  # (N,m)
-        m = Y_pred.shape[1]
-        t_applyH = stamp() - t0
-
-        # -----------------------
-        # distMatK once
-        # -----------------------
-        t0 = stamp()
-        distMatK = None
-        if self.distMat is not None:
-            Dfull = self.distMat.to(device=device, dtype=torch.float32)
-            Dperm = Dfull[perm][:, perm]
-            distMatK = Dperm[:K, :K]
-        t_dist = stamp() - t0
-
-        # -----------------------
-        # Build order + TM once
-        # -----------------------
-        t0 = stamp()
-        order = self._build_order(K, distMatK)
-        TM = TransportMap(order, lambda_=self.lambda_, delta=self.delta, scalingRbf=self.scalingRbf)
-        t_tm_init = stamp() - t0
-
-        # -----------------------
-        # Main scalar loop
-        # -----------------------
-        t_loop_total = 0.0
-        t_gen_total = 0.0
-        t_synth_total = 0.0
-        t_mapinput_total = 0.0
-        t_opt_total = 0.0
-        t_eval_total = 0.0
-        t_inv_total = 0.0
-        t_assign_total = 0.0
-        t_cache_total = 0.0
-
-        for j in range(m):
-            tj0 = stamp()
-
-            # --- generate idx ---
-            t0 = stamp()
-            M = self.M or N
-            idx = self._generate_realizations(N, M, device=device)
-            t_gen = stamp() - t0
-
-            # --- synthetic obs ---
-            t0 = stamp()
-            yj = y[j]
-            if isinstance(sigma_y, torch.Tensor) and sigma_y.numel() > 1:
-                sigma_j = float(sigma_y[j].item())
+                order.append(orders_p)
+                non_id_comp.append(comp_idx)
             else:
-                sigma_j = float(sigma_y)
-            Yj_synth = Y_pred[idx, j] + sigma_j * torch.randn((M,), device=device, dtype=torch.float32)
-            t_synth = stamp() - t0
+                order.append([0] * comp_idx + [1])
 
-            # --- mapInput build ---
-            t0 = stamp()
-            mapInput = torch.cat([Yj_synth[:, None], Xsub[idx]], dim=1)  # (M,K+1)
-            t_mapinput = stamp() - t0
+        return order, non_id_comp, permutation_state
 
-            # --- cache invalidation (if you insist on keeping it) ---
-            t0 = stamp()
-            # TM.invalidate_cache()   # <-- comment/uncomment to measure its cost
-            t_cache = stamp() - t0
+    def inflate(self, X: torch.Tensor) -> torch.Tensor:
+        """Apply multiplicative inflation."""
+        rho = float(self.options.get('rho', 0.0))
+        if rho == 0.0:
+            return X
+        mean_x = X.mean(dim=0, keepdim=True)
+        factor = torch.sqrt(torch.tensor(1.0 + rho, device=X.device, dtype=X.dtype))
+        return (X - mean_x) * factor + mean_x
 
-            # --- optimize ---
-            t0 = stamp()
-            TM.optimize(mapInput, nonIdComp=list(range(1, K + 2)))
-            t_opt = stamp() - t0
+    def assimilate_scalar_obs(self, X_pr: torch.Tensor, data_idx: int, Yt: float) -> torch.Tensor:
+        """Assimilate a scalar observation."""
+        N, d_state = X_pr.shape
+        device = X_pr.device
+        dtype = X_pr.dtype
 
-            # --- eval map ---
-            t0 = stamp()
-            mapOutput = TM.eval_map(mapInput)
-            t_eval = stamp() - t0
+        # Build transport map for this specific observation
+        order, non_id_comp, permutation = self._setup_tmap_for_obs(data_idx)
 
-            # --- inverse map ---
-            t0 = stamp()
-            mapOutput[:, 0] = yj
-            mapInput_post = TM.inverse_map(mapOutput, mapInput)
-            t_inv = stamp() - t0
+        # Create transport map (dimension is 1 + d_state)
+        TM = TransportMap(d_state + 1, order, self.options)
 
-            # --- assign back ---
-            t0 = stamp()
-            Xsub[idx] = mapInput_post[:, 1:]
-            t_assign = stamp() - t0
+        # Set identity components
+        id_comp = set(range(TM.d)) - set(non_id_comp)
+        for ck in id_comp:
+            TM.S[ck].set_id_comp()
 
-            tj = stamp() - tj0
+        # Apply inflation
+        X_infl = self.inflate(X_pr)
 
-            # accumulate totals
-            t_loop_total += tj
-            t_gen_total += t_gen
-            t_synth_total += t_synth
-            t_mapinput_total += t_mapinput
-            t_cache_total += t_cache
-            t_opt_total += t_opt
-            t_eval_total += t_eval
-            t_inv_total += t_inv
-            t_assign_total += t_assign
+        # Permute state so observed variable is first
+        X_infl_perm = X_infl[:, permutation]
+        X_pr_perm = X_pr[:, permutation]
 
-            # if timing and (j % timing_every_j == 0 or j == m - 1):
-            #     print(
-            #         f"[SMF timing] j={j:3d}/{m-1:3d}  total={tj*1e3:8.2f} ms | "
-            #         f"idx={t_gen*1e3:7.2f}  synth={t_synth*1e3:7.2f}  "
-            #         f"mapIn={t_mapinput*1e3:7.2f}  cache={t_cache*1e3:7.2f}  "
-            #         f"opt={t_opt*1e3:9.2f}  eval={t_eval*1e3:7.2f}  inv={t_inv*1e3:7.2f}  "
-            #         f"assign={t_assign*1e3:7.2f}"
-            #     )
+        # Get observation noise
+        if isinstance(self.model.get('sigma_y'), torch.Tensor):
+            if self.model['sigma_y'].dim() > 0:
+                sigma = self.model['sigma_y'][data_idx]
+            else:
+                sigma = self.model['sigma_y']
+        else:
+            sigma = self.model.get('sigma_y', 1.0)
 
-        # -----------------------
-        # Pack / unpermute
-        # -----------------------
-        t0 = stamp()
-        Xp[:, :K] = Xsub
-        invperm = torch.argsort(perm)
-        out = Xp[:, invperm].to(dtype=X.dtype)
-        t_pack = stamp() - t0
+        # Sample likelihood: y ~ N(x_0, sigma^2)
+        Yi_infl = X_infl_perm[:, 0:1] + sigma * torch.randn(N, 1, device=device, dtype=dtype)
 
-        t_total = stamp() - t0_total
+        # Build map input: [y, x]
+        YX_infl = torch.cat([Yi_infl, X_infl_perm], dim=1)
 
-        # if timing:
-        #     print("\n========== SMF timing summary ==========")
-        #     print(f"setup/perm:   {t_setup:8.4f} s")
-        #     print(f"apply_H:      {t_applyH:8.4f} s")
-        #     print(f"distMatK:     {t_dist:8.4f} s")
-        #     print(f"TM init:      {t_tm_init:8.4f} s")
-        #     print(f"loop total:   {t_loop_total:8.4f} s  (m={m}, K={K}, M={self.M or N})")
-        #     print(f"  idx:        {t_gen_total:8.4f} s")
-        #     print(f"  synth:      {t_synth_total:8.4f} s")
-        #     print(f"  mapInput:   {t_mapinput_total:8.4f} s")
-        #     print(f"  cache:      {t_cache_total:8.4f} s")
-        #     print(f"  optimize:   {t_opt_total:8.4f} s")
-        #     print(f"  eval_map:   {t_eval_total:8.4f} s")
-        #     print(f"  inverse:    {t_inv_total:8.4f} s")
-        #     print(f"  assign:     {t_assign_total:8.4f} s")
-        #     print(f"pack/unperm:  {t_pack:8.4f} s")
-        #     print(f"TOTAL:        {t_total:8.4f} s")
-        #     print("========================================\n")
+        # Optimize transport map
+        TM.optimize(YX_infl, non_id_comp)
 
-        return out
+        # Sample likelihood with un-inflated state
+        Yi = X_pr_perm[:, 0:1] + sigma * torch.randn(N, 1, device=device, dtype=dtype)
+        YX = torch.cat([Yi, X_pr_perm], dim=1)
 
+        # Evaluate composed map: condition on observation
+        YX_post = self._evaluate(TM, YX, Yt)
+
+        # Extract state part
+        X_post_perm = YX_post[:, 1:]
+
+        # Inverse permutation
+        X_post = torch.zeros_like(X_post_perm)
+        for i in range(len(permutation)):
+            X_post[:, permutation[i]] = X_post_perm[:, i]
+
+        return X_post
+
+    def _evaluate(self, TM: TransportMap, YX: torch.Tensor, Yt: float) -> torch.Tensor:
+        """Evaluate the composed map for conditioning."""
+        eta = TM.eval_map(YX)
+        # MATLAB behavior: y-component is identity, so set eta_y = Yt directly.
+        eta[:, 0] = float(Yt)
+        return TM.eval_inv_map(eta)
+
+    def sample_posterior(self, X_pr: torch.Tensor, Yt: torch.Tensor) -> torch.Tensor:
+        """Generate posterior samples by sequentially assimilating observations."""
+        data_idx = self.model['data_indices']
+        n_obs = len(data_idx)
+
+        X_post = X_pr.clone()
+        for i in range(n_obs):
+            X_post = self.assimilate_scalar_obs(X_post, data_idx[i], Yt[i].item())
+
+        return X_post
 
 
 def smf_transport_update(
-    xf: Tensor,                           # (N,d) or (B,N,d)
-    y: Tensor,                            # (m,) or (B,m)
-    H: Union[Tensor, Callable[[Tensor], Tensor]],
-    sigma_y: Union[float, Tensor],
-    *,
-    distMat: Optional[Tensor],
-    offdiag_rad: float,
-    p_rbf: int,
+    xf: torch.Tensor,
+    y: torch.Tensor,
+    H: Union[torch.Tensor, Callable],
+    sigma_y: Union[float, torch.Tensor],
+    distMat: Optional[torch.Tensor] = None,
+    offdiag_rad: int = None,
+    p_rbf: int = 2,
     diag_order: int = 2,
     nonId_radius: Optional[int] = None,
     M: Optional[int] = None,
     lambda_: float = 0.0,
     delta: float = 1e-8,
     scalingRbf: float = 2.0,
-) -> Tensor:
+    rho: float = 0.0,
+) -> torch.Tensor:
     """
-    Batched wrapper (matches MATLAB scalar-sequential assimilation semantics).
+    Wrapper function for SMF transport update.
+
+    Implements scalar sequential assimilation from the paper.
+    Each observation is assimilated one at a time.
     """
-    nonId_radius = xf.shape[-1] if nonId_radius is None else int(nonId_radius)
-    order_all = 1 + int(p_rbf)
+    B, N, d_state = xf.shape
+    d_obs = y.shape[1]
+    device = xf.device
+    dtype = xf.dtype
 
-    if xf.ndim == 2:
-        smf = StochasticMapFilterPy(
-            distMat=distMat,
-            offdiag_rad=offdiag_rad,
-            order_all=order_all,
-            diag_order=diag_order,
-            nonId_radius=nonId_radius,
-            lambda_=lambda_,
-            delta=delta,
-            scalingRbf=scalingRbf,
-            M=M,
-        )
-        return smf.sample_posterior(xf, y, H, sigma_y)
+    if M is None:
+        M = N
+    if nonId_radius is None:
+        nonId_radius = d_state
+    if distMat is None:
+        distMat = torch.zeros(d_state, d_state, dtype=torch.int64, device=device)
+    if offdiag_rad is None:
+        offdiag_rad = d_state
 
-    if xf.ndim == 3:
-        B = xf.shape[0]
-        xa = xf.clone()
-        for b in range(B):
-            print(b)
-            smf = StochasticMapFilterPy(
-                distMat=distMat,
-                offdiag_rad=offdiag_rad,
-                order_all=order_all,
-                diag_order=diag_order,
-                nonId_radius=nonId_radius,
-                lambda_=lambda_,
-                delta=delta,
-                scalingRbf=scalingRbf,
-                M=M,
-            )
-            xa[b] = smf.sample_posterior(xf[b], y[b], H, sigma_y)
-        return xa
+    # Determine observed state variables
+    if isinstance(H, torch.Tensor):
+        H_mat = H.to(device=device, dtype=dtype)
+        data_indices = []
+        for i in range(d_obs):
+            obs_row = H_mat[i]
+            nonzero = torch.nonzero(obs_row).squeeze()
+            if nonzero.numel() == 1:
+                data_indices.append(nonzero.item())
+            else:
+                data_indices.append(nonzero[0].item())
+    else:
+        data_indices = list(range(d_obs))
 
-    # raise ValueError("xf must be (N,d) or (B,N,d)")
+    # Setup options
+    base_options = {
+        'M': M,
+        'distMat': distMat,
+        'order_all': p_rbf,
+        'data_order': p_rbf,
+        'offdiag_order': p_rbf,
+        'diag_order_obs': diag_order,
+        'diag_order_unobs': 1,
+        'nonId_radius': nonId_radius,
+        'offdiag_rad': int(offdiag_rad),
+        'rho': rho,
+        'lambda': lambda_,
+        'delta': delta,
+        'scalingWidths': scalingRbf,
+    }
 
+    # Process each batch
+    xa_list = []
+    for b in range(B):
+        xf_b = xf[b]
+        y_b = y[b]
 
+        model = {
+            'd': d_state,
+            'sigma_y': sigma_y,
+            'data_indices': data_indices,
+        }
 
+        # Create filter
+        smf = StochasticMapFilter(model, base_options)
+
+        # Sequential assimilation
+        xa_b = xf_b.clone()
+        for obs_idx in range(d_obs):
+            state_idx = data_indices[obs_idx]
+            xa_b = smf.assimilate_scalar_obs(xa_b, state_idx, y_b[obs_idx].item())
+
+        xa_list.append(xa_b)
+
+    return torch.stack(xa_list, dim=0)

@@ -44,7 +44,8 @@ python train.py \
     --lr_decay_epochs 400,800,1200,1600,2000,2400,2800 \
     --lr_decay_rate 0.7 \
     --random_noise \
-    --suffix '_3k_sigma^2_l96' \
+    --suffix '_3k_sigma^2_randomH_l96' \
+    --random_h True
 # python finetune.py \
 #     --dataset lorenz96 \
 #     --seed 42 \

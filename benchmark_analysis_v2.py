@@ -971,7 +971,6 @@ def stochastic_map_filter_analysis(
                     sig_for_smf = sig_for_smf.to(device=X.device, dtype=torch.float64).flatten()
 
                 # Call your batched wrapper on the first K dims only
-                print('hi1')
                 X_firstK = smf_transport_update(
                     xf=X[:, :, :K].to(torch.float64),      # (B,N,K)
                     y=y_star.to(torch.float64),            # (B,m)
@@ -983,13 +982,11 @@ def stochastic_map_filter_analysis(
                     diag_order=2,
                     nonId_radius=K,
                     M=M,
-                    lambda_=0,
+                    lambda_=0.001,
                     delta=1e-8,
                     scalingRbf=2.0,
                 ).to(dtype=X.dtype)
-                print('hi')
-                print(X_firstK)
-
+                # print(X_firstK)
                 # Splice back into full state
                 X_analysis = X.clone()
                 X_analysis[:, :, :K] = X_firstK

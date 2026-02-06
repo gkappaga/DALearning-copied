@@ -1184,9 +1184,6 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
             B = batch_v.shape[1]
             if args.random_noise:
                 sigma_y_batch = (
-                    torch.rand(B, device=args.device) * (0.9) + 0.1
-                )
-                sigma_y_batch = (
                     torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
                 )
             else:
@@ -1198,21 +1195,59 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
             cov_diff_list, rcov_diff_list, pf_rmse_list = [], [], []
 
             obs_y_list = []
-            if not args.sigma_y:
-                for i in range(len(batch_v)):
-                    obs_y_step = H_fun(batch_v[i].unsqueeze(1))
+            if not args.random_h:
+                if not args.sigma_y:
+                    for i in range(len(batch_v)):
+                        obs_y_step = H_fun(batch_v[i].unsqueeze(1))
+                        obs_y_step += sigma_y_batch.view(-1, 1, 1) * torch.randn_like(obs_y_step, device=args.device)
+                        obs_y_list.append(obs_y_step)
+                else:
+                    for i in range(len(batch_v)):
+                        obs_y_step = H_fun(batch_v[i].unsqueeze(1))
+                        obs_y_step += args.sigma_y * torch.randn_like(obs_y_step, device=args.device)
+                        obs_y_list.append(obs_y_step)
+            else:
+                if not args.sigma_y:
+                    obs_y_step = H_fun(batch_v[0].unsqueeze(1))
                     obs_y_step += sigma_y_batch.view(-1, 1, 1) * torch.randn_like(obs_y_step, device=args.device)
                     obs_y_list.append(obs_y_step)
-            else:
-                for i in range(len(batch_v)):
-                    obs_y_step = H_fun(batch_v[i].unsqueeze(1))
+                else:
+                    obs_y_step = H_fun(batch_v[0].unsqueeze(1))
                     obs_y_step += args.sigma_y * torch.randn_like(obs_y_step, device=args.device)
                     obs_y_list.append(obs_y_step)
-            
+            # print(torch.stack(obs_y_list).shape)
 
             for i in range(len(batch_v) - 1):
                 print(f" Time step {i + 1}/{len(batch_v) - 1} ", end='\r')
-                obs_y = obs_y_list[i + 1]
+                # if args.random_noise:
+                #     sigma_y_batch = torch.empty(B, device=args.device).uniform_(0.1, 1.0)
+                #     # OR if you want the deterministic grid but reshuffled each timestep:
+                #     # sigma_y_batch = torch.linspace(0.1, 1.0, steps=B, device=args.device)[torch.randperm(B, device=args.device)]
+                # else:
+                #     sigma_y_batch = torch.full((B,), args.sigma_y, device=args.device)
+
+                if args.random_h:
+                    selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # (B, obs_dim)
+
+                    # H: (B, obs_dim, ori_dim)
+                    H = torch.nn.functional.one_hot(selected_inds, num_classes=args.ori_dim).to(dtype=ens_v_a.dtype)
+
+                    # H_matrices: (B, ori_dim, obs_dim) for right-multiplying state vectors
+                    H_matrices = H.transpose(1, 2)
+
+                    def H_fun_step(V):
+                        # V: (B, N, D) -> (B, N, obs_dim)
+                        return torch.bmm(V, H_matrices)
+                else:
+                    H_fun, H = H_info  # only meaningful if args.access_to_H expects it
+                    def H_fun_step(V):
+                        return H_fun(V)
+                obs_y = H_fun_step(batch_v[i + 1].unsqueeze(1))  # (B, 1, obs_dim)
+                obs_y = obs_y + sigma_y_batch.view(-1, 1, 1) * torch.randn_like(obs_y, device=args.device)
+                if args.random_h:
+                    obs_y_list.append(obs_y)
+            
+                # obs_y = obs_y_list[i + 1]
                 if args.v.startswith('iEnKS'):
                     ens_v_f = ens_v_a
                 else:
@@ -1230,29 +1265,27 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 B_shape, N_ens, D_state = ens_v_f.shape
                 d_obs_shape = obs_y.shape[2]
 
-                
-                
                 if args.access_to_H:
                     invalid_trajs = None
-                    H = H.expand(B, H.shape[1], H.shape[2])
+                    # if you’re using random_h, H is already (B, obs_dim, ori_dim)
+                    # if not random_h, you probably have a base H somewhere; keep your old logic
+                    if H is None:
+                        H = H.expand(B, H.shape[1], H.shape[2])
+
                     dtype = H.dtype
 
                     if args.access_to_noise:
-                        # Case 1: access to H and to noise (σ_y per trajectory known)
-                        # Build Γ_b = σ_y(b)^2 * I_{obs_dim} for each batch element b
-                        sigma_vec = (sigma_y_batch.to(dtype))**2                      # (B,)
-                        sigma_vec = sigma_vec.unsqueeze(-1).expand(B, args.obs_dim)   # (B, obs_dim)
-                        Gammas = torch.diag_embed(sigma_vec).to(device=args.device)   # (B, obs_dim, obs_dim)
-
+                        sigma_vec = (sigma_y_batch.to(dtype))**2
+                        sigma_vec = sigma_vec.unsqueeze(-1).expand(B, args.obs_dim)
+                        Gammas = torch.diag_embed(sigma_vec).to(device=args.device)
                     else:
-                        # Case 2: access to H but NOT to noise (estimate Γ̃ via sampling)
+                        # sampling-based Gamma_tilde uses sigma_y_batch[traj] for this timestep (good)
                         Gammas = torch.empty(B, args.obs_dim, args.obs_dim, device=args.device, dtype=dtype)
                         for traj in range(B):
                             eta_samples = sigma_y_batch[traj].to(dtype) * torch.randn(
                                 (args.N, args.obs_dim), device=args.device, dtype=dtype
                             )
-                            Gamma_tilde = torch.cov(eta_samples.T, correction=1)      # (obs_dim, obs_dim)
-                            Gammas[traj] = Gamma_tilde
+                            Gammas[traj] = torch.cov(eta_samples.T, correction=1)
 
                 else:
                     # Case 3: NO access to H and NO access to noise (your existing logic — unchanged)
@@ -1270,7 +1303,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                             v_i = v_ens[n]
                             eta = sigma_y_batch[traj] * torch.randn(args.obs_dim, device=args.device)
                             eta_samples.append(eta)
-                            y_i = H_fun(v_i) + eta
+                            y_i = H_fun_step(v_i.view(1,1,-1)).view(-1) + eta
                             y_samples.append(y_i)
                         Y = torch.stack(y_samples, dim=0).squeeze(1)
                         V = v_ens
@@ -1331,7 +1364,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 # print(H_tildes)
                 common_enkf_args = {
                     "observation_y": obs_y.squeeze(1),
-                    "observation_operator_ens": H_fun,
+                    "observation_operator_ens": H_fun_step,
                     "sigma_y": args.sigma_y,
                     "sigma_v": args.sigma_v,
                     "inflation_factor": infl,
@@ -1469,7 +1502,8 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     rcov_diff = cov_diff / torch.norm(pf_cov_ens_a, p='fro', dim=(-2, -1))
                     cov_diff_list.append(cov_diff)
                     rcov_diff_list.append(rcov_diff)
-
+            temp = torch.stack(obs_y_list)
+            print(temp.shape)
             if args.access_to_H:
                 ens_tensor = torch.stack(ens_list)
             else:

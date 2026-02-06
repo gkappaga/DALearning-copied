@@ -4,7 +4,7 @@
 
 #SBATCH --time=3-00:00:00     # walltime (3 days)
 #SBATCH --nodes=1             # number of nodes (1 node)
-#SBATCH --gres=gpu:3          # 3 GPUs of any type
+#SBATCH --gres=gpu:nvidia_h200:1          # 3 GPUs of any type
 #SBATCH --partition=gpu       # use GPU partition
 #SBATCH --ntasks=1            # 1 task
 #SBATCH -J "SMF_vsN"          # job name

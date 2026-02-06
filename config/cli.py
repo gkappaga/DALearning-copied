@@ -105,6 +105,7 @@ def get_parameters():
     parser.add_argument('--mc_penalty', type=bool, default=False, help='whether to use mean, covariance matching')
     parser.add_argument('--lambda1', type=float, default=0.0, help = 'Weight for mean penalty')
     parser.add_argument('--lambda2', type=float, default=0.0, help='Weight for covariance penalty')
+    parser.add_argument('--random_h', type=bool, default = False, help='whether to use random H in training')
 
     # training setting
     parser.add_argument('--cp_load_path', type=str, default="no",
