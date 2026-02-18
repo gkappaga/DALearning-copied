@@ -4,7 +4,7 @@
 
 #SBATCH --time=3-00:00:00     # walltime (3 days)
 #SBATCH --nodes=1             # number of nodes (1 node)
-#SBATCH --gres=gpu:nvidia_h200:1          # 3 GPUs of any type
+#SBATCH --gres=gpu:p100:1          # 3 GPUs of any type
 #SBATCH --partition=gpu       # use GPU partition
 #SBATCH --ntasks=1            # 1 task
 #SBATCH -J "SMF_vsN"          # job name
@@ -21,4 +21,4 @@
 cd $HOME/gkappaga-DALearning-2/DALearning-copied
 
 # Run the experiment script (no args expected)
-python evaluate_benchmark.py --v SMF --N 100 --dataset lorenz63 --sigma_y 2 --smf_rbf_p 2 --smf_rho 0.025 --access_to_noise --access_to_H
+python grid_search.py

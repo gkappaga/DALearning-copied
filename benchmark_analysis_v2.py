@@ -1071,7 +1071,9 @@ def _enkf_pert_obs_analysis(
     sigma_y,                # scalar or (B,)
     localization_matrix_Lxy=None, # (d_state, d_obs), broadcasts
     localization_matrix_Lyy=None,  # (d_obs, d_obs), broadcasts
-    Gamma_Tildes=None
+    Gamma_Tildes=None,
+    coords_state=None,
+    loc_radius=None
 ):
     """ EnKF with Perturbed Observations - Analysis Step (Batched) """
     batch_size, N_ensemble, d_state = ensemble_f.shape
@@ -1093,6 +1095,12 @@ def _enkf_pert_obs_analysis(
     AYf, _ = center_ensemble(ensemble_y_f, rescale=False)
 
     scaling_factor = 1.0 / (N_ensemble - 1) if N_ensemble > 1 else 1.0
+    
+    # Pxx = (Af.transpose(-2, -1) @ Af) * scaling_factor        
+    # full_inds = torch.arange(0, d_state)
+    # dist_xx = pairwise_distances(full_inds[:, None], full_inds[:, None], domain=(d_state,)).to(ensemble_f.device)
+    # Dxx = dist2coeff(dist_xx, radius=loc_radius)
+    # Pxx = (Af.transpose(-2, -1) @ Af) * scaling_factor * Dxx
     
     Pxy = (Af.transpose(-2, -1) @ AYf) * scaling_factor
     Pyy = (AYf.transpose(-2, -1) @ AYf) * scaling_factor
@@ -1371,6 +1379,7 @@ def _letkf_analysis(
         AYf_global_transformed = AYf_global @ Gamma_inv_sqrt
         innovation_mean_global_transformed = innovation_mean_global @ Gamma_inv_sqrt
     else:
+        sigma_y = torch.tensor(sigma_y, device=device, dtype=dtype)
         if sigma_y.ndim == 0:
             sigma_y_exp = sigma_y.view(1, 1, 1).expand(B, N, d_obs)
         elif sigma_y.ndim == 1:
@@ -1942,9 +1951,9 @@ def ensemble_kalman_filter_analysis(
     elif method == "EnKF-PertObs":
         ensemble_a_valid, kalman_gain_or_transform = _enkf_pert_obs_analysis(
             ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y,
-            localization_matrix_Lxy, localization_matrix_Lyy, Gamma_Tilde_valid
+            localization_matrix_Lxy, localization_matrix_Lyy, Gamma_Tilde_valid,
+            coords_state, localization_radius
         )
-
     elif method == "ESRF":  # ETKF variant
         ensemble_a_valid, kalman_gain_or_transform = _esrf_analysis(
             ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y, Gamma_Tilde_valid

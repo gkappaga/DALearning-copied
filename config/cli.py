@@ -216,6 +216,7 @@ def get_parameters():
     parser.add_argument('--access_to_noise', action='store_true', help='Access to noise')
     parser.add_argument('--random_noise', action='store_true', help='Use random noise for sigma_y')
     parser.add_argument('--access_to_H', action='store_true', help='Access to H')
+    parser.add_argument('--loc_radius', type=float_or_none_or_default, default=None, help='Localization radius (can be float or None)')
     # version setting
     parser.add_argument('--v', type=str, choices=['CorrTerms','EtE','EtE-LRes','EtE2','EnKF','ESRF','LETKF', 'LearnK', 'Affine', 'Affine-ydagger', 'SMF', 'iEnKS-PertObs', 'iEnKS-Sqrt'],
                         default='EnKF', help='versions')
