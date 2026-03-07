@@ -462,6 +462,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 sigma_y_batch = (
                     torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
                 )
+                sigma_y_batch = torch.linspace(0.1, 3, steps = B, device = args.device)
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
             ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -494,7 +495,17 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 ens_v_f = ens_v_f + torch.randn_like(ens_v_f, device=args.device) * args.sigma_v
 
                 # preparation for individual ensemble data
-                hv = H_fun(ens_v_f)
+                if args.random_h:
+                    selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # [B, obs_dim]
+
+                    # H as [B, obs_dim, ori_dim] (each row picks a coordinate)
+                    H = F.one_hot(selected_inds, num_classes=args.ori_dim).to(ens_v_f.dtype)  # [B, obs_dim, ori_dim]
+
+                    # If you want H as [B, ori_dim, obs_dim], transpose:
+                    H_matrices = H.transpose(1, 2)  # [B, ori_dim, obs_dim]
+                    hv = torch.bmm(ens_v_f, H_matrices)
+                else:
+                    hv = H_fun(ens_v_f)
                 
                 # ens_v_a, K = EnKF_analysis(ens_v_f, hv, obs_y, args.sigma_y, a_method="PertObs")
                 B, N, D = ens_v_f.shape

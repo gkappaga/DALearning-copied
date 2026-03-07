@@ -1113,7 +1113,31 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
     Returns:
         dict: A dictionary containing mean and standard deviation of evaluation metrics.
     """
-    print(args.v)
+    def _finite_mask(x: torch.Tensor) -> torch.Tensor:
+        return torch.isfinite(x)
+
+    def _safe_min_max_mean(x: torch.Tensor):
+        """
+        Works even if torch.nanmin/nanmax/nanmean don't exist.
+        Returns (min, max, mean) over finite entries only.
+        If no finite entries, returns (nan, nan, nan).
+        """
+        m = _finite_mask(x)
+        if not m.any():
+            nan = float("nan")
+            return nan, nan, nan
+        xf = x[m]
+        return float(xf.min().item()), float(xf.max().item()), float(xf.mean().item())
+
+    def _trap(name: str, x: torch.Tensor, t: int, extra: str = ""):
+        if torch.is_tensor(x) and (not torch.isfinite(x).all().item()):
+            mn, mx, me = _safe_min_max_mean(x.detach())
+            print(f"[NONFINITE] t={t} {name} shape={tuple(x.shape)} "
+                f"min={mn:.3e} max={mx:.3e} mean={me:.3e} {extra}")
+            torch.save({"t": t, "name": name, "tensor": x.detach().cpu()}, "first_nonfinite.pt")
+            raise RuntimeError(f"Nonfinite in {name} at t={t}")
+
+
     m = args.N
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
@@ -1214,9 +1238,10 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
             # print(torch.stack(obs_y_list).shape)
             t = time.time()
             for i in range(len(batch_v) - 1):
-                # print(f" Time step {i + 1}/{len(batch_v) - 1} ", end='\r')
+                print(f" Time step {i + 1}/{len(batch_v) - 1} ", end='\r')
                 if args.random_noise:
                     sigma_y_batch = torch.empty(B, device=args.device).uniform_(0.1, 1.0)
+                    sigma_y_batch = torch.linspace(0.1, 3, steps = B, device=args.device)
                     # OR if you want the deterministic grid but reshuffled each timestep:
                     # sigma_y_batch = torch.linspace(0.1, 1.0, steps=B, device=args.device)[torch.randperm(B, device=args.device)]
                 else:
@@ -1245,9 +1270,10 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 
                 obs_y = H_fun_step(batch_v[i + 1].unsqueeze(1))  # (B, 1, obs_dim)
                 obs_y = obs_y + sigma_y_batch.view(-1, 1, 1) * torch.randn_like(obs_y, device=args.device)
-                
                 if args.random_h:
                     obs_y_list.append(obs_y)
+                    _trap("obs_y", obs_y, i)
+
             
                 # obs_y = obs_y_list[i + 1]
                 if args.v.startswith('iEnKS'):
@@ -1263,6 +1289,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     ens_v_f = ens_v_a_forecast_input.view(-1, m, args.ori_dim)
                     
                     ens_v_f += torch.randn_like(ens_v_f, device=args.device) * args.sigma_v
+                    _trap("ens_v_f", ens_v_f, i)
                 
                 B_shape, N_ens, D_state = ens_v_f.shape
                 d_obs_shape = obs_y.shape[2]
@@ -1408,6 +1435,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args, method='ESRF',
                         localization_matrix_Lxy=loc_mat_vy, localization_matrix_Lyy=loc_mat_yy)
+                    _trap("ens_v_a", ens_v_a, t)
                 elif args.v == 'LETKF':
                     coords_state = torch.arange(D_state, device=args.device, dtype=batch_v.dtype).unsqueeze(1)
                     if args.random_h:
@@ -1645,6 +1673,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
 
     final_metrics = {}
     if all_results['rrmse'].numel() == 0:
+        print('here')
         metrics_keys = ['mean_rmse', 'std_rmse', 'mean_rmv', 'std_rmv', 'mean_rrmse', 'std_rrmse',
                         'mean_crps', 'std_crps', 'mean_rcrps', 'std_rcrps', 'mean_cov_diff', 
                         'std_cov_diff', 'mean_rcov_diff', 'std_rcov_diff', 'mean_pf_rmse', 'std_pf_rmse']

@@ -77,6 +77,24 @@ def get_benchmarks(args):
 
 import matplotlib.pyplot as plt
 
+def print_run_signature(tag, args):
+    print(f"\n[{tag}] RUN SIGNATURE")
+    keys = [
+        "dataset","v","N","seed",
+        "random_h","random_noise","access_to_H","access_to_noise",
+        "ori_dim","obs_dim","sigma_y",
+        "test_traj_num","test_batch_size","test_steps",
+        "cp_load_path",
+    ]
+    for k in keys:
+        print(f"  {k}: {getattr(args, k, None)}")
+    oi = getattr(args, "obs_inds", None)
+    if oi is not None:
+        oi_cpu = oi.detach().cpu() if hasattr(oi, "detach") else oi
+        oi_list = list(oi_cpu[:10]) if len(oi_cpu) >= 10 else list(oi_cpu)
+        print(f"  obs_inds[:10] (len={len(oi_cpu)}): {oi_list}")
+
+
 def sweep_ensemble_sizes_for_rrmse(method_name, args_template):
     """
     Sweep over ensemble sizes N_list, evaluate SMF (or other method),
@@ -141,7 +159,7 @@ if __name__ == "__main__":
     args = get_parameters()
     args.test_only = True  # Set test_only to True for analysis
     # enkf_args.plot = args.plot
-    args.N = 5
+    args.N = 20
     args.v = 'ESRF'  # Set the method to EnKF for testing
     args.dataset = 'lorenz96'
     args.cp_load_path = 'no'  # No checkpoint loading for this test
@@ -163,6 +181,7 @@ if __name__ == "__main__":
         os.makedirs(folder_name)
     
     # redirect output
+    print_run_signature('eval', args)
     with redirect_output(folder_name, filename="test_output.txt", enable_redirect=args.redirect_output):
         print(f'{args.access_to_noise}')
         if args.seed is not None and args.seed != "None":
