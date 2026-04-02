@@ -1,10 +1,29 @@
 import re
 import os
+import os, torch
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
+import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.set_float32_matmul_precision("high")  # PyTorch 2.x
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.use_deterministic_algorithms(True)   # may throw if an op has no det. path
+
+# Turn off TF32 to avoid GEMM path changes
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
+# CUBLAS determinism for matmuls (set before import torch if possible)
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"  # or ":4096:8"
+
 import math
 import sys
 import copy
 import random
-import torch
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -24,23 +43,6 @@ import dapper.mods as modelling
 from dapper.tools.localization import nd_Id_localization
 from dapper.mods.Lorenz96 import LPs
 
-import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"  # before torch import
-
-import torch
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
-
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-torch.use_deterministic_algorithms(True)
-torch.set_float32_matmul_precision("high")
-
-
 # customized
 from grid_search_config import GRID_SEARCH_INFO
 
@@ -59,6 +61,23 @@ def suppress_output():
         finally:
             sys.stdout = old_stdout  # Restore stdout
             sys.stderr = old_stderr  # Restore stderr
+
+def print_run_signature(tag, args):
+    print(f"\n[{tag}] RUN SIGNATURE")
+    keys = [
+        "dataset","v","N","seed",
+        "random_h","random_noise","access_to_H","access_to_noise",
+        "ori_dim","obs_dim","sigma_y",
+        "test_traj_num","test_batch_size","test_steps",
+        "cp_load_path",
+    ]
+    for k in keys:
+        print(f"  {k}: {getattr(args, k, None)}")
+    oi = getattr(args, "obs_inds", None)
+    if oi is not None:
+        oi_cpu = oi.detach().cpu() if hasattr(oi, "detach") else oi
+        oi_list = list(oi_cpu[:10]) if len(oi_cpu) >= 10 else list(oi_cpu)
+        print(f"  obs_inds[:10] (len={len(oi_cpu)}): {oi_list}")
 
 def plot_heatmap_with_nan(data, x_list, y_list, save_path=None, img_title="Grid Search"):
     """
@@ -198,116 +217,6 @@ def plot_simple(x, y, save_path=None, img_title="Infl Search"):
         plt.show()  # Show plot interactively
     plt.close()  # Close the plot to release memory
 
-def create_HMM(dataset, sigma_y):
-    """
-    Create a Hidden Markov Model (HMM) based on the specified dataset.
-
-    Parameters:
-    -----------
-    dataset : str
-        Name of the dataset ('ks', 'lorenz96', 'lorenz63').
-    sigma_y : float
-        Observation noise standard deviation.
-
-    Returns:
-    --------
-    HMM : modelling.HiddenMarkovModel
-        The created Hidden Markov Model for the specified dataset.
-    """
-    if dataset == 'ks':
-        from dapper.mods.KS import Model, Tplot
-        
-        KS = Model(dt=GRID_SEARCH_INFO[dataset]["dt"])
-        Nx = KS.Nx
-
-        tseq = modelling.Chronology(
-            dt=GRID_SEARCH_INFO[dataset]["dt"],
-            dto=GRID_SEARCH_INFO[dataset]["dto"],
-            Ko=GRID_SEARCH_INFO[dataset]["ko"],
-            BurnIn=1000,
-            Tplot=Tplot
-        )
-
-        Dyn = {
-            "M": Nx,
-            "model": KS.step,
-            "linear": KS.dstep_dx,
-            "noise": 0,
-        }
-
-        X0 = modelling.GaussRV(mu=KS.x0, C=1)
-
-        jj = GRID_SEARCH_INFO[dataset]["obs_inds"]
-        Obs = modelling.partial_Id_Obs(Nx, jj)
-        Obs["noise"] = sigma_y ** 2
-        Obs["localizer"] = nd_Id_localization((Nx,), (4,), jj)
-
-        HMM = modelling.HiddenMarkovModel(Dyn, Obs, tseq, X0)
-
-    elif dataset == 'lorenz96':
-        from dapper.mods.Lorenz96 import Tplot, dstep_dx, step, x0
-        
-        tseq = modelling.Chronology(
-            dt=GRID_SEARCH_INFO[dataset]["dt"],
-            dto=GRID_SEARCH_INFO[dataset]["dto"],
-            Ko=GRID_SEARCH_INFO[dataset]["ko"],
-            Tplot=Tplot,
-            BurnIn=2 * Tplot
-        )
-        
-        Nx = GRID_SEARCH_INFO[dataset]["Nx"]
-        x0 = x0(Nx)
-
-        Dyn = {
-            "M": Nx,
-            "model": step,
-            "linear": dstep_dx,
-            "noise": 0,
-        }
-
-        X0 = modelling.GaussRV(mu=x0, C=0.1)
-
-        jj = GRID_SEARCH_INFO[dataset]["obs_inds"]
-        Obs = modelling.partial_Id_Obs(Nx, jj)
-        Obs["noise"] = sigma_y ** 2
-        Obs["localizer"] = nd_Id_localization((Nx,), (2,), jj)
-
-        HMM = modelling.HiddenMarkovModel(Dyn, Obs, tseq, X0)
-
-    elif dataset == 'lorenz63':
-        from dapper.mods.Lorenz63 import LPs, Tplot, dstep_dx, step, x0
-
-        tseq = modelling.Chronology(
-            dt=GRID_SEARCH_INFO[dataset]["dt"],
-            dto=GRID_SEARCH_INFO[dataset]["dto"],
-            Ko=GRID_SEARCH_INFO[dataset]["ko"],
-            Tplot=Tplot,
-            BurnIn=4 * Tplot
-        )
-        
-        Nx = len(x0)
-
-        Dyn = {
-            "M": Nx,
-            "model": step,
-            "linear": dstep_dx,
-            "noise": 0,
-        }
-
-        X0 = modelling.GaussRV(mu=x0, C=1)
-
-        jj = GRID_SEARCH_INFO[dataset]["obs_inds"]
-        Obs = modelling.partial_Id_Obs(Nx, jj)
-        Obs["noise"] = sigma_y ** 2
-
-        HMM = modelling.HiddenMarkovModel(Dyn, Obs, tseq, X0)
-
-    else:
-        raise ValueError(f"Unknown dataset: {dataset}")
-
-    return HMM, tseq
-
-
 
 def main(grid_search_info):
     base_args = get_parameters()          # defaults only
@@ -316,10 +225,10 @@ def main(grid_search_info):
     base_args.random_noise = True
     base_args.access_to_noise = True
     base_args.access_to_H = True
-    base_args.redirect_output = False
     base_args.test_batch_size = 64
     base_args.test_traj_num = 64
     base_args.random_h = True
+    base_args.cp_load_path = 'no'
 
     def make_args(**overrides):
         a = copy.deepcopy(base_args)
@@ -327,43 +236,47 @@ def main(grid_search_info):
             setattr(a, k, v)
         return a
     
-    def set_all_seeds(seed: int):
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
+    # def set_all_seeds(seed: int):
+    #     # random.seed(seed)
+    #     # np.random.seed(seed)
+    #     torch.manual_seed(seed)
+    #     if torch.cuda.is_available():
+    #         torch.cuda.manual_seed_all(seed)
 
     def run_one_trial(base_args, cfg, trial_ind):
         args = copy.deepcopy(base_args)
 
         # trial seed (applies to dataloader shuffling + model randomness)
-        seed = int(base_args.seed)
-        args.seed = seed
-        set_all_seeds(seed)
+        # seed = int(base_args.seed)
+        # args.seed = seed
+        # set_all_seeds(seed)
 
         # apply sweep params
         args.N = cfg["N"]
         args.v = cfg["method"]          # if your code uses args.v to choose filter
         # args.dataset and args.sigma_y should already be set on base_args for this loop
         infl = cfg["infl"]
-        infl = 1.1
+        # infl = 1.1
         loc_radius = cfg["loc_rad"]
         args.dataset = cfg["dataset"]
         args.ori_dim = cfg["ori_dim"]
         args.obs_dim = cfg["obs_dim"]
         args.random_h = True
         args.random_noise = True
-        args.N = 20
-        args.v = 'ESRF'
+        args.cp_load_path = 'no'  # No checkpoint loading for this test
+        args.seed = 42
+        args.test_only = True
+        args.test_traj_num = 64
+        args.test_batch_size = 64
+        # args.N = 20
+        # args.v = 'ESRF'
         args.obs_inds = torch.arange(0, args.ori_dim, args.ori_dim // args.obs_dim)
-        print(len(args.obs_inds), args.obs_dim)
         H_info = partial_obs_operator(args.ori_dim, args.obs_inds, args.device)
-
+        print_run_signature('grid', args)
         # Call your code.
         # loader param is unused in your snippet since the function makes its own test_loader.
         test_loader = get_dataloader(args, test_only = True)
-        print(f"Running trial {trial_ind} with N={args.N}, infl={infl}, loc_radius={loc_radius}, sigma_y={args.sigma_y}")
+        print(f"Running trial {trial_ind} with N={args.N}, infl={infl}, loc_radius={loc_radius}, sigma_y={args.sigma_y}, dataset = {args.dataset}, v= {args.v}")
         out = test_ClassicFilter_v2(
             loader=test_loader,
             args=args,
@@ -372,9 +285,10 @@ def main(grid_search_info):
             infl=infl,
             loc_radius=loc_radius,
             plot_figures=False,
-            save_pdf=False,
+            save_pdf=True,
         )
-
+        # test_ClassicFilter_v2(test_loader, args, plot=False, H_info=H_info, plot_figures=False, 
+        # fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=1.1, loc_radius=None)
         # Normalize return shape to dict
         rmse  = out.get("mean_rmse", float("nan"))
         rmse_std = out.get("std_rmse", float("nan"))
@@ -386,7 +300,7 @@ def main(grid_search_info):
         crps_std = out.get("std_crps", float("nan"))
         rcrps = out.get("mean_rcrps", float("nan"))
         rcrps_std = out.get("std_rcrps", float("nan"))
-
+        print(rrmse)
         return rmse, rmse_std, rmv, rmv_std, rrmse, rrmse_std, crps, crps_std, rcrps, rcrps_std
 
         # If it returns a tuple like (mean_rrmse, mean_rmse, ...)
@@ -577,7 +491,7 @@ def main(grid_search_info):
                         })
 
                 if trial_processed:
-                    print(f"Grid search reults exists for {method_name} on {dataset} with random noise, ensemble size {N}.")
+                    print(f"Grid search results exist for {method_name} on {dataset} with random noise, ensemble size {N}.")
                     data_save_path = os.path.join('save', 'data', f'{dataset}_{method_name}_{N}_results.npz')
                     saved_data = np.load(data_save_path)
 
