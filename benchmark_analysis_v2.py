@@ -1379,7 +1379,11 @@ def _letkf_analysis(
         AYf_global_transformed = AYf_global @ Gamma_inv_sqrt
         innovation_mean_global_transformed = innovation_mean_global @ Gamma_inv_sqrt
     else:
-        sigma_y = torch.tensor(sigma_y, device=device, dtype=dtype)
+        # sigma_y = torch.tensor(sigma_y, device=device, dtype=dtype)
+        if not torch.is_tensor(sigma_y):
+            sigma_y = torch.as_tensor(sigma_y, device=device, dtype=dtype)
+        else:
+            sigma_y = sigma_y.to(device=device, dtype=dtype)
         if sigma_y.ndim == 0:
             sigma_y_exp = sigma_y.view(1, 1, 1).expand(B, N, d_obs)
         elif sigma_y.ndim == 1:
@@ -1396,6 +1400,15 @@ def _letkf_analysis(
         else:
             raise ValueError("Unsupported shape for sigma_y")
         innovation_mean_global_transformed = innovation_mean_global / sigma_y_exp
+        if sigma_y.ndim == 0:
+            AYf_global_transformed = AYf_global / sigma_y
+            innovation_mean_global_transformed = innovation_mean_global / sigma_y
+        elif sigma_y.ndim == 1:
+            sigma_y_y = sigma_y.view(B, 1, 1)
+            AYf_global_transformed = AYf_global / sigma_y_y
+            innovation_mean_global_transformed = innovation_mean_global / sigma_y_y
+        else:
+            raise ValueError("Unsupported shape for sigma_y")
         # print(innovation_mean_global_transformed.shape)
     # AYf_global_transformed = AYf_global / sigma_y         # (B, N_ensemble, d_obs)
     # innovation_mean_global_transformed = innovation_mean_global / sigma_y # (B, 1, d_obs)
@@ -1405,66 +1418,171 @@ def _letkf_analysis(
     ensemble_a_anom_parts = torch.zeros_like(Af_global)   # (B, N_ensemble, d_state)
 
     # Loop over each state variable to update it locally
+    # for k_state_idx in range(d_state):
+    #     # current_mean_f_k: (B, 1) mean of k-th state var for all batches
+    #     current_mean_f_k = mean_f_global[:, :, k_state_idx]
+    #     # current_Af_k: (B, N_ensemble, 1) anomalies of k-th state var
+    #     current_Af_k = Af_global[:, :, k_state_idx].unsqueeze(-1)
+
+    #     # --- Localization: This part is NOT batched over `batch_size` ---
+    #     # --- It's computed once per k_state_idx as coords are shared ---
+    #     # Coords for k-th state var: (1, D_coord)
+    #     coord_k_state = coords_state[k_state_idx].unsqueeze(0)
+
+    #     # Distances from k-th state variable to all observations: (1, d_obs)
+    #     # Assumes pairwise_distances can handle (N,D) (M,D) -> (N,M) inputs
+    #     # or a specific 2D version is used for these non-batched coordinates.
+    #     dist_state_k_to_obs = pairwise_distances(
+    #         coord_k_state, coords_obs, domain=domain
+    #     ).squeeze(0) # -> (d_obs,)
+        
+    #     rho_k = dist2coeff(dist_state_k_to_obs, localization_radius) # (d_obs,)
+    #     local_obs_indices = torch.where(rho_k > 1e-6)[0] # (N_y_local_k,)
+        
+    #     if len(local_obs_indices) == 0: # No observations influence this state variable
+    #         ensemble_a_mean_parts[:, :, k_state_idx] = current_mean_f_k
+    #         ensemble_a_anom_parts[:, :, k_state_idx] = current_Af_k.squeeze(-1)
+    #         continue
+
+    #     # Select local observations for this k_state_idx
+    #     # These are now batched over `batch_size`
+    #     # AYf_local_k_transformed: (B, N_ensemble, N_y_local_k)
+    #     AYf_local_k = AYf_global_transformed[:, :, local_obs_indices]
+    #     # innov_local_k_transformed: (B, 1, N_y_local_k)
+    #     innov_local_k = innovation_mean_global_transformed[:, :, local_obs_indices]
+        
+    #     # Apply localization weights to observations (sqrt_rho acts on transformed obs anoms)
+    #     rho_local_k_weights = rho_k[local_obs_indices] # (N_y_local_k,)
+    #     # sqrt_rho_local_k broadcastable: (1, 1, N_y_local_k)
+    #     sqrt_rho_local_k_bcast = torch.sqrt(rho_local_k_weights).view(1, 1, -1)
+
+    #     # eff_AYf_k_anom: (B, N_ensemble, N_y_local_k)
+    #     eff_AYf_k_anom = AYf_local_k * sqrt_rho_local_k_bcast
+    #     # eff_innov_k: (B, 1, N_y_local_k) -> squeezed to (B, N_y_local_k)
+    #     eff_innov_k = (innov_local_k * sqrt_rho_local_k_bcast).squeeze(1)
+
+    #     # Core ETKF update for (k_state_idx, and all batches)
+    #     # current_mean_f_k is (B,1), current_Af_k is (B, N_ens, 1)
+    #     if Gamma_Tildes is not None:
+    #         updated_mean_k, updated_A_k = _letkf_core_etkf_update(
+    #             current_mean_f_k, current_Af_k,
+    #             eff_AYf_k_anom, eff_innov_k, N_ensemble, Gamma_inv_sqrt=Gamma_inv_sqrt
+    #         )
+    #     else:
+    #         updated_mean_k, updated_A_k = _letkf_core_etkf_update(
+    #             current_mean_f_k, current_Af_k,
+    #             eff_AYf_k_anom, eff_innov_k, N_ensemble
+    #         )
+    #     # updated_mean_k: (B,1), updated_A_k: (B, N_ensemble, 1)
+
+    #     ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k
+    #     ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_k.squeeze(-1)
     for k_state_idx in range(d_state):
-        # current_mean_f_k: (B, 1) mean of k-th state var for all batches
-        current_mean_f_k = mean_f_global[:, :, k_state_idx]
-        # current_Af_k: (B, N_ensemble, 1) anomalies of k-th state var
-        current_Af_k = Af_global[:, :, k_state_idx].unsqueeze(-1)
+        current_mean_f_k = mean_f_global[:, :, k_state_idx]              # (B, 1)
+        current_Af_k = Af_global[:, :, k_state_idx].unsqueeze(-1)        # (B, N_ensemble, 1)
 
-        # --- Localization: This part is NOT batched over `batch_size` ---
-        # --- It's computed once per k_state_idx as coords are shared ---
-        # Coords for k-th state var: (1, D_coord)
-        coord_k_state = coords_state[k_state_idx].unsqueeze(0)
+        # ------------------------------------------------------------
+        # Case 1: shared observation coordinates (old behavior)
+        # ------------------------------------------------------------
+        if coords_obs.ndim == 2:
+            coord_k_state = coords_state[k_state_idx].unsqueeze(0)       # (1, D_coord)
 
-        # Distances from k-th state variable to all observations: (1, d_obs)
-        # Assumes pairwise_distances can handle (N,D) (M,D) -> (N,M) inputs
-        # or a specific 2D version is used for these non-batched coordinates.
-        dist_state_k_to_obs = pairwise_distances(
-            coord_k_state, coords_obs, domain=domain
-        ).squeeze(0) # -> (d_obs,)
-        
-        rho_k = dist2coeff(dist_state_k_to_obs, localization_radius) # (d_obs,)
-        local_obs_indices = torch.where(rho_k > 1e-6)[0] # (N_y_local_k,)
-        
-        if len(local_obs_indices) == 0: # No observations influence this state variable
-            ensemble_a_mean_parts[:, :, k_state_idx] = current_mean_f_k
-            ensemble_a_anom_parts[:, :, k_state_idx] = current_Af_k.squeeze(-1)
-            continue
+            dist_state_k_to_obs = pairwise_distances(
+                coord_k_state, coords_obs, domain=domain
+            ).squeeze(0)                                                 # (d_obs,)
 
-        # Select local observations for this k_state_idx
-        # These are now batched over `batch_size`
-        # AYf_local_k_transformed: (B, N_ensemble, N_y_local_k)
-        AYf_local_k = AYf_global_transformed[:, :, local_obs_indices]
-        # innov_local_k_transformed: (B, 1, N_y_local_k)
-        innov_local_k = innovation_mean_global_transformed[:, :, local_obs_indices]
-        
-        # Apply localization weights to observations (sqrt_rho acts on transformed obs anoms)
-        rho_local_k_weights = rho_k[local_obs_indices] # (N_y_local_k,)
-        # sqrt_rho_local_k broadcastable: (1, 1, N_y_local_k)
-        sqrt_rho_local_k_bcast = torch.sqrt(rho_local_k_weights).view(1, 1, -1)
+            rho_k = dist2coeff(dist_state_k_to_obs, localization_radius) # (d_obs,)
+            local_obs_indices = torch.where(rho_k > 1e-6)[0]
 
-        # eff_AYf_k_anom: (B, N_ensemble, N_y_local_k)
-        eff_AYf_k_anom = AYf_local_k * sqrt_rho_local_k_bcast
-        # eff_innov_k: (B, 1, N_y_local_k) -> squeezed to (B, N_y_local_k)
-        eff_innov_k = (innov_local_k * sqrt_rho_local_k_bcast).squeeze(1)
+            if len(local_obs_indices) == 0:
+                ensemble_a_mean_parts[:, :, k_state_idx] = current_mean_f_k
+                ensemble_a_anom_parts[:, :, k_state_idx] = current_Af_k.squeeze(-1)
+                continue
 
-        # Core ETKF update for (k_state_idx, and all batches)
-        # current_mean_f_k is (B,1), current_Af_k is (B, N_ens, 1)
-        if Gamma_Tildes is not None:
-            updated_mean_k, updated_A_k = _letkf_core_etkf_update(
-                current_mean_f_k, current_Af_k,
-                eff_AYf_k_anom, eff_innov_k, N_ensemble, Gamma_inv_sqrt=Gamma_inv_sqrt
-            )
+            AYf_local_k = AYf_global_transformed[:, :, local_obs_indices]                 # (B, N, n_loc)
+            innov_local_k = innovation_mean_global_transformed[:, :, local_obs_indices]   # (B, 1, n_loc)
+
+            rho_local_k_weights = rho_k[local_obs_indices]                                # (n_loc,)
+            sqrt_rho_local_k_bcast = torch.sqrt(rho_local_k_weights).view(1, 1, -1)
+
+            eff_AYf_k_anom = AYf_local_k * sqrt_rho_local_k_bcast
+            eff_innov_k = (innov_local_k * sqrt_rho_local_k_bcast).squeeze(1)
+
+            if Gamma_Tildes is not None:
+                updated_mean_k, updated_A_k = _letkf_core_etkf_update(
+                    current_mean_f_k, current_Af_k,
+                    eff_AYf_k_anom, eff_innov_k, N_ensemble, Gamma_inv_sqrt=Gamma_inv_sqrt
+                )
+            else:
+                updated_mean_k, updated_A_k = _letkf_core_etkf_update(
+                    current_mean_f_k, current_Af_k,
+                    eff_AYf_k_anom, eff_innov_k, N_ensemble
+                )
+
+            ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k
+            ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_k.squeeze(-1)
+
+        # ------------------------------------------------------------
+        # Case 2: batched observation coordinates (exact behavior)
+        # ------------------------------------------------------------
+        elif coords_obs.ndim == 3:
+            updated_mean_all = current_mean_f_k.clone()                      # (B, 1)
+            updated_A_all = current_Af_k.clone()                             # (B, N, 1)
+
+            coord_k_state = coords_state[k_state_idx].unsqueeze(0)           # (1, D_coord)
+
+            for b in range(batch_size):
+                coords_obs_b = coords_obs[b]                                 # (d_obs, D_coord)
+
+                dist_state_k_to_obs_b = pairwise_distances(
+                    coord_k_state, coords_obs_b, domain=domain
+                ).squeeze(0)                                                 # (d_obs,)
+
+                rho_k_b = dist2coeff(dist_state_k_to_obs_b, localization_radius)  # (d_obs,)
+                local_obs_indices_b = torch.where(rho_k_b > 1e-6)[0]
+
+                if len(local_obs_indices_b) == 0:
+                    continue
+
+                AYf_local_b = AYf_global_transformed[b:b+1, :, local_obs_indices_b]               # (1, N, n_loc_b)
+                innov_local_b = innovation_mean_global_transformed[b:b+1, :, local_obs_indices_b] # (1, 1, n_loc_b)
+
+                rho_local_b = rho_k_b[local_obs_indices_b]                                         # (n_loc_b,)
+                sqrt_rho_local_b = torch.sqrt(rho_local_b).view(1, 1, -1)
+
+                eff_AYf_b = AYf_local_b * sqrt_rho_local_b
+                eff_innov_b = (innov_local_b * sqrt_rho_local_b).squeeze(1)                        # (1, n_loc_b)
+
+                if Gamma_Tildes is not None:
+                    # Subselect the observation-noise matrix to the local obs set for this batch
+                    Gamma_b = Gamma_Tildes[b:b+1][:, local_obs_indices_b][:, :, local_obs_indices_b]   # (1, n_loc_b, n_loc_b)
+
+                    eps = 1e-3
+                    dloc = Gamma_b.shape[-1]
+                    jitter = eps * torch.eye(dloc, device=device, dtype=dtype).unsqueeze(0)
+                    Gamma_b_pd = Gamma_b + jitter
+                    L_b = torch.linalg.cholesky(Gamma_b_pd)
+                    Gamma_inv_sqrt_b = torch.linalg.pinv(L_b)
+
+                    updated_mean_b, updated_A_b = _letkf_core_etkf_update(
+                        current_mean_f_k[b:b+1], current_Af_k[b:b+1],
+                        eff_AYf_b, eff_innov_b, N_ensemble,
+                        Gamma_inv_sqrt=Gamma_inv_sqrt_b
+                    )
+                else:
+                    updated_mean_b, updated_A_b = _letkf_core_etkf_update(
+                        current_mean_f_k[b:b+1], current_Af_k[b:b+1],
+                        eff_AYf_b, eff_innov_b, N_ensemble
+                    )
+
+                updated_mean_all[b:b+1] = updated_mean_b
+                updated_A_all[b:b+1] = updated_A_b
+
+            ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_all
+            ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_all.squeeze(-1)
+
         else:
-            updated_mean_k, updated_A_k = _letkf_core_etkf_update(
-                current_mean_f_k, current_Af_k,
-                eff_AYf_k_anom, eff_innov_k, N_ensemble
-            )
-        # updated_mean_k: (B,1), updated_A_k: (B, N_ensemble, 1)
-
-        ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k
-        ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_k.squeeze(-1)
-
+            raise ValueError(f"coords_obs must have ndim 2 or 3, got shape {coords_obs.shape}")
     ensemble_a = ensemble_a_mean_parts + ensemble_a_anom_parts
     return ensemble_a, None
 
@@ -1932,14 +2050,29 @@ def ensemble_kalman_filter_analysis(
         valid_mask = ~invalid_trajs
 
     # Filter inputs for valid trajectories only if invalid_trajs provided
+    # if valid_mask is not None:
+    #     ensemble_f_valid = ensemble_f[valid_mask]
+    #     observation_y_valid = observation_y[valid_mask] if observation_y is not None else None
+    #     Gamma_Tilde_valid = Gamma_Tilde[valid_mask] if (Gamma_Tilde is not None) else None
+    # else:
+    #     ensemble_f_valid = ensemble_f
+    #     observation_y_valid = observation_y
+    #     Gamma_Tilde_valid = Gamma_Tilde
+
     if valid_mask is not None:
         ensemble_f_valid = ensemble_f[valid_mask]
         observation_y_valid = observation_y[valid_mask] if observation_y is not None else None
         Gamma_Tilde_valid = Gamma_Tilde[valid_mask] if (Gamma_Tilde is not None) else None
+
+        if coords_obs is not None and torch.is_tensor(coords_obs) and coords_obs.ndim == 3:
+            coords_obs_valid = coords_obs[valid_mask]
+        else:
+            coords_obs_valid = coords_obs
     else:
         ensemble_f_valid = ensemble_f
         observation_y_valid = observation_y
         Gamma_Tilde_valid = Gamma_Tilde
+        coords_obs_valid = coords_obs
 
     kalman_gain_or_transform = None
     ensemble_a_valid = None
@@ -1962,9 +2095,13 @@ def ensemble_kalman_filter_analysis(
     elif method == "LETKF":
         if (localization_radius is None) or (coords_state is None) or (coords_obs is None):
             raise ValueError("LETKF requires localization_radius, coords_state, and coords_obs.")
+        # ensemble_a_valid, kalman_gain_or_transform = _letkf_analysis(
+        #     ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y,
+        #     localization_radius, coords_state, coords_obs, localization_domain, Gamma_Tilde_valid
+        # )
         ensemble_a_valid, kalman_gain_or_transform = _letkf_analysis(
             ensemble_f_valid, observation_y_valid, observation_operator_ens, sigma_y,
-            localization_radius, coords_state, coords_obs, localization_domain, Gamma_Tilde_valid
+            localization_radius, coords_state, coords_obs_valid, localization_domain, Gamma_Tilde_valid
         )
 
     elif method.startswith("iEnKS"):

@@ -1136,8 +1136,27 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 f"min={mn:.3e} max={mx:.3e} mean={me:.3e} {extra}")
             torch.save({"t": t, "name": name, "tensor": x.detach().cpu()}, "first_nonfinite.pt")
             raise RuntimeError(f"Nonfinite in {name} at t={t}")
+    
+    def make_random_H_step(args, B, dtype):
+        # sample obs_dim unique coordinates independently for each batch item
+        selected_inds = torch.stack([
+            torch.randperm(args.ori_dim, device=args.device)[:args.obs_dim]
+            for _ in range(B)
+        ], dim=0)  # (B, obs_dim)
 
+        H = torch.nn.functional.one_hot(
+            selected_inds, num_classes=args.ori_dim
+        ).to(dtype=dtype)  # (B, obs_dim, ori_dim)
 
+        H_matrices = H.transpose(1, 2).contiguous()  # (B, ori_dim, obs_dim)
+
+        def H_fun_step(V):
+            # V: (B, N, D) -> (B, N, obs_dim)
+            return torch.bmm(V, H_matrices)
+
+        return H_fun_step, H
+
+    print(args)
     m = args.N
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
@@ -1241,7 +1260,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 print(f" Time step {i + 1}/{len(batch_v) - 1} ", end='\r')
                 if args.random_noise:
                     sigma_y_batch = torch.empty(B, device=args.device).uniform_(0.1, 1.0)
-                    sigma_y_batch = torch.linspace(0.1, 3, steps = B, device=args.device)
+                    sigma_y_batch = torch.linspace(0.5, 3, steps = B, device=args.device)
                     # OR if you want the deterministic grid but reshuffled each timestep:
                     # sigma_y_batch = torch.linspace(0.1, 1.0, steps=B, device=args.device)[torch.randperm(B, device=args.device)]
                 else:
@@ -1250,19 +1269,25 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 if args.random_h:
                     # selected_inds = torch.rand(1, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # (B, obs_dim)
                     # selected_inds = selected_inds.expand(B, -1)  # (B, obs_dim)
-                    selected_inds_1 = torch.randperm(args.ori_dim, device=args.device)[:args.obs_dim]  # (obs_dim,)
+                    H_fun_step, H = make_random_H_step(args, B, ens_v_a.dtype)
+                    H_matrices = H.transpose(1, 2).contiguous()
+                    #print the observation indices that are equal to 1 for each batch
+                    # print(f"Time step {i + 1}: Randomly selected observation indices for each batch item:")
+                    # for b in range(B):
+                    #     print(f"  Batch {b + 1}: {torch.where(H[b] == 1)[1].tolist()}")
+                    # selected_inds_1 = torch.randperm(args.ori_dim, device=args.device)[:args.obs_dim]  # (obs_dim,)
 
-                    # If later code expects (B, obs_dim):
-                    selected_inds = selected_inds_1.unsqueeze(0).expand(B, -1)
+                    # # If later code expects (B, obs_dim):
+                    # selected_inds = selected_inds_1.unsqueeze(0).expand(B, -1)
 
-                    # H: (B, obs_dim, ori_dim)
-                    H = torch.nn.functional.one_hot(selected_inds, num_classes=args.ori_dim).to(dtype=ens_v_a.dtype)
+                    # # H: (B, obs_dim, ori_dim)
+                    # H = torch.nn.functional.one_hot(selected_inds, num_classes=args.ori_dim).to(dtype=ens_v_a.dtype)
 
-                    # H_matrices: (B, ori_dim, obs_dim) for right-multiplying state vectors
-                    H_matrices = H.transpose(1, 2).to(args.device)
-                    def H_fun_step(V):
-                        # V: (B, N, D) -> (B, N, obs_dim)
-                        return torch.bmm(V, H_matrices)
+                    # # H_matrices: (B, ori_dim, obs_dim) for right-multiplying state vectors
+                    # H_matrices = H.transpose(1, 2).to(args.device)
+                    # def H_fun_step(V):
+                    #     # V: (B, N, D) -> (B, N, obs_dim)
+                    #     return torch.bmm(V, H_matrices)
                 else:
                     H_fun, H = H_info  # only meaningful if args.access_to_H expects it
                     def H_fun_step(V):
@@ -1416,14 +1441,26 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     
                     loc_mat_vy = dist2coeff(args.Lvy, radius=loc_radius).unsqueeze(0) if loc_radius is not None else None
                     loc_mat_yy = dist2coeff(args.Lyy, radius=loc_radius).unsqueeze(0) if loc_radius is not None else None
-                    if args.random_h:
-                        obs_inds = H_matrices.argmax(dim=1)          # (B, d_obs)
-                        coords_obs = obs_inds[0].long().unsqueeze(1).to(args.device) # (d_obs, 1)
-                        full_inds = torch.arange(0, args.ori_dim, device=args.device).to(args.device)
-                        Lvy = pairwise_distances(full_inds[:, None], coords_obs, domain=torch.as_tensor((args.ori_dim,)).to(args.device)).to(args.device)
-                        Lyy = pairwise_distances(coords_obs, coords_obs, domain=torch.as_tensor((args.ori_dim,)).to(args.device)).to(args.device)
-                        loc_mat_vy = dist2coeff(Lvy, radius=loc_radius).unsqueeze(0).to(args.device) if loc_radius is not None else None
-                        loc_mat_yy = dist2coeff(Lyy, radius=loc_radius).unsqueeze(0).to(args.device) if loc_radius is not None else None
+
+                    if args.random_h and loc_radius is not None:
+                        obs_inds = H_matrices.argmax(dim=1)   # (B, d_obs)
+                        full_inds = torch.arange(args.ori_dim, device=args.device).long().unsqueeze(1)  # (d_state, 1)
+                        domain = torch.as_tensor((args.ori_dim,), device=args.device)
+
+                        Lvy_list = []
+                        Lyy_list = []
+                        for b in range(B):
+                            coords_obs_b = obs_inds[b].long().unsqueeze(1)   # (d_obs, 1)
+                            Lvy_b = pairwise_distances(full_inds, coords_obs_b, domain=domain).to(args.device)   # (d_state, d_obs)
+                            Lyy_b = pairwise_distances(coords_obs_b, coords_obs_b, domain=domain).to(args.device) # (d_obs, d_obs)
+                            Lvy_list.append(Lvy_b)
+                            Lyy_list.append(Lyy_b)
+
+                        Lvy = torch.stack(Lvy_list, dim=0)   # (B, d_state, d_obs)
+                        Lyy = torch.stack(Lyy_list, dim=0)   # (B, d_obs, d_obs)
+
+                        loc_mat_vy = dist2coeff(Lvy, radius=loc_radius).to(args.device)
+                        loc_mat_yy = dist2coeff(Lyy, radius=loc_radius).to(args.device)
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args, method='EnKF-PertObs',
                         localization_matrix_Lxy=loc_mat_vy, localization_matrix_Lyy=loc_mat_yy)
@@ -1432,6 +1469,20 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     # loc_yy = dist2coeff(args.Lyy, radius=loc_radius, dim1=d_obs_shape, dim2=d_obs_shape, device=args.device).unsqueeze(0) if loc_radius is not None else None
                     loc_mat_vy = dist2coeff(args.Lvy, radius=loc_radius).unsqueeze(0) if loc_radius is not None else None
                     loc_mat_yy = dist2coeff(args.Lyy, radius=loc_radius).unsqueeze(0) if loc_radius is not None else None
+                    if args.random_h:
+                        obs_inds = H_matrices.argmax(dim=1)  # (B, d_obs)
+                        coords_obs = obs_inds[0].long().unsqueeze(1).to(args.device)
+                        full_inds = torch.arange(0, args.ori_dim, device=args.device)
+                        Lvy = pairwise_distances(
+                            full_inds[:, None], coords_obs,
+                            domain=torch.as_tensor((args.ori_dim,), device=args.device)
+                        ).to(args.device)
+                        Lyy = pairwise_distances(
+                            coords_obs, coords_obs,
+                            domain=torch.as_tensor((args.ori_dim,), device=args.device)
+                        ).to(args.device)
+                        loc_mat_vy = dist2coeff(Lvy, radius=loc_radius).unsqueeze(0) if loc_radius is not None else None
+                        loc_mat_yy = dist2coeff(Lyy, radius=loc_radius).unsqueeze(0) if loc_radius is not None else None
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args, method='ESRF',
                         localization_matrix_Lxy=loc_mat_vy, localization_matrix_Lyy=loc_mat_yy)
@@ -1439,10 +1490,14 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 elif args.v == 'LETKF':
                     coords_state = torch.arange(D_state, device=args.device, dtype=batch_v.dtype).unsqueeze(1)
                     if args.random_h:
-                            obs_inds = H_matrices.argmax(dim=1)          # (B, d_obs)
-                            coords_obs = obs_inds[0].long().unsqueeze(1) # (d_obs, 1)
+                        obs_inds = H_matrices.argmax(dim=1)                    # (B, d_obs)
+                        coords_obs = obs_inds.long().unsqueeze(-1)             # (B, d_obs, 1)
                     else:
-                        coords_obs = torch.as_tensor(args.obs_inds, device=args.device, dtype=batch_v.dtype).unsqueeze(1) if hasattr(args, 'obs_inds') and args.obs_inds is not None else torch.linspace(0, D_state-1, steps=d_obs_shape, device=args.device, dtype=batch_v.dtype).long().unsqueeze(1)
+                        coords_obs = (
+                            torch.as_tensor(args.obs_inds, device=args.device, dtype=torch.long).unsqueeze(1)
+                            if hasattr(args, 'obs_inds') and args.obs_inds is not None
+                            else torch.linspace(0, D_state - 1, steps=d_obs_shape, device=args.device).long().unsqueeze(1)
+                        )                                                      # (d_obs, 1)
                     domain = torch.tensor([D_state], device=args.device, dtype=batch_v.dtype)
                     # print(common_enkf_args)
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
@@ -1494,7 +1549,12 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
 
                 elif args.v.startswith('iEnKS'):
                     coords_state = torch.arange(D_state, device=args.device, dtype=batch_v.dtype).unsqueeze(1)
-                    coords_obs = torch.as_tensor(args.obs_inds, device=args.device, dtype=batch_v.dtype).unsqueeze(1) if hasattr(args, 'obs_inds') and args.obs_inds is not None else torch.linspace(0, D_state-1, steps=d_obs_shape, device=args.device, dtype=batch_v.dtype).long().unsqueeze(1)
+                    if args.random_h:
+                            obs_inds = H_matrices.argmax(dim=1)          # (B, d_obs)
+                            coords_obs = obs_inds[0].long().unsqueeze(1) # (d_obs, 1)
+                    else:
+                        coords_obs = torch.as_tensor(args.obs_inds, device=args.device, dtype=batch_v.dtype).unsqueeze(1) if hasattr(args, 'obs_inds') and args.obs_inds is not None else torch.linspace(0, D_state-1, steps=d_obs_shape, device=args.device, dtype=batch_v.dtype).long().unsqueeze(1)
+                    # coords_obs = torch.as_tensor(args.obs_inds, device=args.device, dtype=batch_v.dtype).unsqueeze(1) if hasattr(args, 'obs_inds') and args.obs_inds is not None else torch.linspace(0, D_state-1, steps=d_obs_shape, device=args.device, dtype=batch_v.dtype).long().unsqueeze(1)
                     domain = torch.tensor([D_state], device=args.device, dtype=batch_v.dtype)
                     
                     model_args_ienks = {
@@ -1595,10 +1655,14 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 
                 obs_tensor = torch.stack(obs_y_list).squeeze(2)
                 observations = torch.full_like(batch_v, float('nan'), device=args.device)
-                if hasattr(args, 'obs_inds') and args.obs_inds is not None:
+                if not args.random_h and hasattr(args, 'obs_inds') and args.obs_inds is not None:
                     observations[:, :, args.obs_inds] = obs_tensor
                 else:
-                    print("Warning: args.obs_inds not defined. Observations tensor might be all NaNs.")
+                    observations = None
+                # if hasattr(args, 'obs_inds') and args.obs_inds is not None:
+                #     observations[:, :, args.obs_inds] = obs_tensor
+                # else:
+                #     print("Warning: args.obs_inds not defined. Observations tensor might be all NaNs.")
             else:
                 # Step 2: Mask valid trajectories
                 valid_mask = ~invalid_trajs
