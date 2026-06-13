@@ -76,44 +76,47 @@ if __name__ == '__main__':
     # enkf_rrmse = enkf_data['rrmse']
     # noise = enkf_data['noise']
 
-    # enkf_args.test_only = True  # Set test_only to True for analysis
-    # # enkf_args.plot = args.plot
-    # enkf_args.N = 10
-    # enkf_args.v = 'EnKF'  # Set the method to EnKF for testing
-    # enkf_args.dataset = 'lorenz63'
-    # enkf_args.cp_load_path = 'no'  # No checkpoint loading for this test
-    # enkf_args.seed = 42
-    # enkf_args.random_noise = True  # Set access to noise for EnKF
-    # enkf_args.access_to_noise = False  # Access to noise for EnKF
-    # enkf_args.test_traj_num = 64*16
-    # enkf_args.test_batch_size = 64
-    # enkf_args.access_to_H = False
+    enkf_args.test_only = True  # Set test_only to True for analysis
+    # enkf_args.plot = args.plot
+    enkf_args.N = 10
+    enkf_args.v = 'EnKF'  # Set the method to EnKF for testing
+    enkf_args.dataset = 'ks'
+    enkf_args.cp_load_path = 'no'  # No checkpoint loading for this test
+    enkf_args.seed = 42
+    enkf_args.random_noise = True  # Set access to noise for EnKF
+    enkf_args.access_to_noise = False  # Access to noise for EnKF
+    enkf_args.test_traj_num = 64
+    enkf_args.test_batch_size = 64
+    enkf_args.access_to_H = False
+    enkf_args.random_h = True
 
-    # # # enkf_args.no_localization = True
+    # # enkf_args.no_localization = True
 
-    # if enkf_args.N != 1000:
-    #         sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(enkf_args)
-    #         dapper_array = sigma_y_1_array
-    #         loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
-    #         print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
-    #         print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
-    #         print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
-    # if enkf_args.seed is not None and enkf_args.seed != "None":
-    #     torch.manual_seed(int(enkf_args.seed))
-    # # args.test_only = True  # Set test_only to True for analysis
-    # test_loader = get_dataloader(enkf_args, test_only=True)
-    # H_info = partial_obs_operator(enkf_args.ori_dim, enkf_args.obs_inds, enkf_args.device)
+    if enkf_args.N != 1000:
+            sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(enkf_args)
+            dapper_array = sigma_y_1_array
+            loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
+            print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
+            print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
+            print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
+    if enkf_args.seed is not None and enkf_args.seed != "None":
+        torch.manual_seed(int(enkf_args.seed))
+    # args.test_only = True  # Set test_only to True for analysis
+    test_loader = get_dataloader(enkf_args, test_only=True)
+    H_info = partial_obs_operator(enkf_args.ori_dim, enkf_args.obs_inds, enkf_args.device)
 
-    # # # # # enkf_rrmse, noise = test_ClassicFilter(
-    # # # # #     test_loader, enkf_args, access_to_noise=True, plot=True, H_info=H_info,
-    # # # # #     plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
-    # # # # # )
-    # enkf_rrmse, noise = test_ClassicFilter_v2(test_loader, enkf_args, plot=True, H_info=H_info, plot_figures=False, 
-    #             save_pdf=True, infl=infl, loc_radius=loc_radius)
-    # torch.save({'rrmse': enkf_rrmse, 'noise': noise}, 'results/enkf_rrmse_l63_approx_H_and_gamma.pt')
-    enkf_data = torch.load('results/enkf_rrmse_l63_approx_H_and_gamma.pt')
-    enkf_rrmse = enkf_data['rrmse']
-    noise = enkf_data['noise']
+    # # # # enkf_rrmse, noise = test_ClassicFilter(
+    # # # #     test_loader, enkf_args, access_to_noise=True, plot=True, H_info=H_info,
+    # # # #     plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
+    # # # # )
+    print('here')
+    enkf_rrmse, noise = test_ClassicFilter_v2(test_loader, enkf_args, plot=True, H_info=H_info, plot_figures=False, 
+                save_pdf=True, infl=1.02, loc_radius=5)
+    print(f'EnKF RRMSE: {enkf_rrmse}, EnKF Noise: {noise}')
+    torch.save({'rrmse': enkf_rrmse, 'noise': noise}, 'results/enkf_rrmse_l96_larger_noise_random_h_n_100.pt')
+    # enkf_data = torch.load('results/enkf_rrmse_l96_larger_noise_random_h.pt')
+    # enkf_rrmse = enkf_data['rrmse']
+    # noise = enkf_data['noise']
 
     # for num in enkf_rrmse:
     #     print(num)
@@ -151,36 +154,36 @@ if __name__ == '__main__':
     # )
     # torch.save({'rrmse': enkf_no_noise_rrmse, 'noise': noise}, 'results/enkf_no_noise_rrmse_l96.pt')
 
-    smf_args.test_only = True  # Set test_only to True for analysis
-    # enkf_args.plot = args.plot
-    smf_args.N = 10
-    smf_args.v = 'SMF'  # Set the method to EnKF for testing
-    smf_args.dataset = 'lorenz96'
-    smf_args.cp_load_path = 'no'  # No checkpoint loading for this test
-    smf_args.seed = 42
-    smf_args.random_noise = True  # Set access to noise for EnKF
-    smf_args.access_to_noise = True  # Access to noise for EnKF
-    smf_args.test_traj_num = 64*16
-    smf_args.test_batch_size = 64
+    # smf_args.test_only = True  # Set test_only to True for analysis
+    # # enkf_args.plot = args.plot
+    # smf_args.N = 10
+    # smf_args.v = 'SMF'  # Set the method to EnKF for testing
+    # smf_args.dataset = 'lorenz96'
+    # smf_args.cp_load_path = 'no'  # No checkpoint loading for this test
+    # smf_args.seed = 42
+    # smf_args.random_noise = True  # Set access to noise for EnKF
+    # smf_args.access_to_noise = True  # Access to noise for EnKF
+    # smf_args.test_traj_num = 64*16
+    # smf_args.test_batch_size = 64
 
-    if enkf_args.N != 1000:
-            sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(enkf_args)
-            dapper_array = sigma_y_1_array
-            loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
-            print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
-            print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
-            print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
-    if enkf_args.seed is not None and enkf_args.seed != "None":
-        torch.manual_seed(int(enkf_args.seed))
-    # args.test_only = True  # Set test_only to True for analysis
-    test_loader = get_dataloader(enkf_args, test_only=True)
-    H_info = partial_obs_operator(enkf_args.ori_dim, enkf_args.obs_inds, enkf_args.device)
+    # if enkf_args.N != 1000:
+    #         sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(enkf_args)
+    #         dapper_array = sigma_y_1_array
+    #         loc_radius, infl, rmse_dapper, rrmse_dapper = dapper_array[0,0], dapper_array[0,1], dapper_array[0,2], dapper_array[0,3]
+    #         print(f"RMSE from DAPPER: {rmse_dapper:.3f}.")
+    #         print(f"RRMSE from DAPPER: {rrmse_dapper:.3f}.")
+    #         print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
+    # if enkf_args.seed is not None and enkf_args.seed != "None":
+    #     torch.manual_seed(int(enkf_args.seed))
+    # # args.test_only = True  # Set test_only to True for analysis
+    # test_loader = get_dataloader(enkf_args, test_only=True)
+    # H_info = partial_obs_operator(enkf_args.ori_dim, enkf_args.obs_inds, enkf_args.device)
 
-    enkf_no_noise_rrmse, noise = test_ClassicFilter(
-        test_loader, enkf_args, access_to_noise=False, plot=True, H_info=H_info,
-        plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
-    )
-    torch.save({'rrmse': enkf_no_noise_rrmse, 'noise': noise}, 'results/enkf_no_noise_rrmse_l96.pt')
+    # enkf_no_noise_rrmse, noise = test_ClassicFilter(
+    #     test_loader, enkf_args, access_to_noise=False, plot=True, H_info=H_info,
+    #     plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
+    # )
+    # torch.save({'rrmse': enkf_no_noise_rrmse, 'noise': noise}, 'results/enkf_no_noise_rrmse_l96.pt')
     # enkf_no_noise_data = torch.load('results/enkf_no_noise_rrmse_l96.pt')
     # enkf_no_noise_rrmse = enkf_no_noise_data['rrmse']
     # enkf_no_noise_noise = enkf_no_noise_data['noise']
@@ -193,7 +196,7 @@ if __name__ == '__main__':
     # import argparse
     # parser = argparse.ArgumentParser(description='Test RRMSE vs Noise')
     # parser.add_argument('--plot', action='store_true', help='Plot the results')
-    args = get_parameters()
+    # args = get_parameters()
     ienkf_args = get_parameters()
     # os.makedirs('results', exist_ok=True)
 
@@ -202,17 +205,20 @@ if __name__ == '__main__':
     # # noise = enkf_data['noise']
 
     # ienkf_args.test_only = True  # Set test_only to True for analysis
-    # # enkf_args.plot = args.plot
+    # # # enkf_args.plot = args.plot
     # ienkf_args.N = 10
     # ienkf_args.v = 'iEnKS-PertObs'  # Set the method to EnKF for testing
     # ienkf_args.dataset = 'lorenz63'
     # ienkf_args.cp_load_path = 'no'  # No checkpoint loading for this test
-    # ienkf_args.seed = 10
+    # ienkf_args.seed = 42
     # ienkf_args.random_noise = True  # Set access to noise for EnKF
     # ienkf_args.access_to_noise = False  # Access to noise for EnKF
-    # ienkf_args.test_traj_num = 64*16
+    # ienkf_args.test_traj_num = 64
     # ienkf_args.test_batch_size = 64
     # ienkf_args.access_to_H = False
+    # ienkf_args.random_h = True
+
+    # # # enkf_args.no_localization = True
     # # # ienkf_args.no_localization = True
 
     # if ienkf_args.N != 1000:
@@ -230,27 +236,29 @@ if __name__ == '__main__':
 
     # ienkf_rrmse, noise = test_ClassicFilter_v2(
     #     test_loader, ienkf_args, plot=True, H_info=H_info,
-    #     plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
+    #     plot_figures=False, loc_radius=None, infl=1.18, save_pdf=False
     # )
-    # torch.save({'rrmse': ienkf_rrmse, 'noise': noise}, 'results/ienkf_rrmse_l63_approx_H_and_gamma.pt')
-    ienkf_data = torch.load('results/ienkf_rrmse_l63_approx_H_and_gamma.pt')
-    ienkf_rrmse = ienkf_data['rrmse']
-    ienkf_noise = ienkf_data['noise']
+    # print(f'iEnKF RRMSE: {ienkf_rrmse}, iEnKF Noise: {noise}')
+    # torch.save({'rrmse': ienkf_rrmse, 'noise': noise}, 'results/ienkf_rrmse_l63_larger_noise_random_h.pt')
+    # ienkf_data = torch.load('results/ienkf_rrmse_l63_approx_H_and_gamma.pt')
+    # ienkf_rrmse = ienkf_data['rrmse']
+    # ienkf_noise = ienkf_data['noise']
 
-    # esrf_args = get_parameters()
-    # esrf_args.test_only = True  # Set test_only to True for analysis
-    # # enkf_args.plot = args.plot
-    # esrf_args.N = 10
-    # esrf_args.v = 'ESRF'  # Set the method to EnKF for testing
-    # esrf_args.dataset = 'lorenz96'
-    # esrf_args.cp_load_path = 'no'  # No checkpoint loading for this test
-    # esrf_args.seed = 42
-    # esrf_args.random_noise = True  # Set access to noise for EnKF
-    # esrf_args.access_to_noise = False  # Access to noise for EnKF
-    # esrf_args.test_traj_num = 64*16
-    # esrf_args.test_batch_size = 64
-    # esrf_args.access_to_H = False
-    # # # esrf_args.no_localization = True
+    esrf_args = get_parameters()
+    esrf_args.test_only = True  # Set test_only to True for analysis
+    # enkf_args.plot = args.plot
+    esrf_args.N = 10
+    esrf_args.v = 'ESRF'  # Set the method to EnKF for testing
+    esrf_args.dataset = 'ks'
+    esrf_args.cp_load_path = 'no'  # No checkpoint loading for this test
+    esrf_args.seed = 42
+    esrf_args.random_noise = True  # Set access to noise for EnKF
+    esrf_args.access_to_noise = False  # Access to noise for EnKF
+    esrf_args.test_traj_num = 64
+    esrf_args.test_batch_size = 64
+    esrf_args.access_to_H = False
+    esrf_args.random_h = True
+    # # esrf_args.no_localization = True
 
     # if esrf_args.N != 1000:
     #         sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(esrf_args)
@@ -261,15 +269,15 @@ if __name__ == '__main__':
     #         print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
     # if esrf_args.seed is not None and esrf_args.seed != "None":
     #     torch.manual_seed(int(esrf_args.seed))
-    # # args.test_only = True  # Set test_only to True for analysis
-    # test_loader = get_dataloader(esrf_args, test_only=True)
-    # H_info = partial_obs_operator(esrf_args.ori_dim, esrf_args.obs_inds, esrf_args.device)
-    # # infl = 1.05
-    # esrf_rrmse, noise = test_ClassicFilter_v2(test_loader, esrf_args, plot=True, H_info=H_info, plot_figures=False,
-    #             save_pdf=True, infl=infl, loc_radius=loc_radius)
+    # args.test_only = True  # Set test_only to True for analysis
+    test_loader = get_dataloader(esrf_args, test_only=True)
+    H_info = partial_obs_operator(esrf_args.ori_dim, esrf_args.obs_inds, esrf_args.device)
+    # infl = 1.05
+    esrf_rrmse, noise = test_ClassicFilter_v2(test_loader, esrf_args, plot=True, H_info=H_info, plot_figures=False,
+                save_pdf=True, infl=1.1, loc_radius=None)
 
-    # torch.save({'rrmse': esrf_rrmse, 'noise': noise}, 'results/esrf_rrmse_l96_approx_H_and_gamma.pt')
-    # esrf_data = torch.load('results/esrf_rrmse_l63_approx_gamma.pt')
+    torch.save({'rrmse': esrf_rrmse, 'noise': noise}, 'results/esrf_rrmse_ks_larger_noise_random_h.pt')
+    # esrf_data = torch.load('results/esrf_rrmse_l96_larger_noise_random_h.pt')
     # esrf_rrmse = esrf_data['rrmse']
     # esrf_noise = esrf_data['noise']
 
@@ -278,18 +286,19 @@ if __name__ == '__main__':
     # letkf_noise = letkf_data['noise']
 
     letkf_args = get_parameters()
-    # letkf_args.test_only = True  # Set test_only to True for analysis
-    # # letkf_args.plot = args.plot
-    # letkf_args.N = 10
-    # letkf_args.v = 'LETKF'  # Set the method to LETKF for testing
-    # letkf_args.dataset = 'lorenz96'
-    # letkf_args.cp_load_path = 'no'  # No checkpoint loading for this test
-    # letkf_args.seed = 42
-    # letkf_args.random_noise = True  # Set access to noise for LETKF
-    # letkf_args.access_to_noise = False  # Access to noise for LETKF
-    # letkf_args.test_traj_num = 64*16
-    # letkf_args.test_batch_size = 64
-    # letkf_args.access_to_H = False
+    letkf_args.test_only = True  # Set test_only to True for analysis
+    # letkf_args.plot = args.plot
+    letkf_args.N = 10
+    letkf_args.v = 'LETKF'  # Set the method to LETKF for testing
+    letkf_args.dataset = 'ks'
+    letkf_args.cp_load_path = 'no'  # No checkpoint loading for this test
+    letkf_args.seed = 42
+    letkf_args.random_noise = True  # Set access to noise for LETKF
+    letkf_args.access_to_noise = False  # Access to noise for LETKF
+    letkf_args.test_traj_num = 64
+    letkf_args.test_batch_size = 64
+    letkf_args.access_to_H = False
+    letkf_args.random_h = True
 
     # if letkf_args.N != 1000:
     #         sigma_y_1_array, sigma_y_0_7_array = get_benchmarks(letkf_args)
@@ -300,17 +309,20 @@ if __name__ == '__main__':
     #         print(f"Inflation: {infl}; Localization Radius: {loc_radius}")
     # if letkf_args.seed is not None and letkf_args.seed != "None":
     #     torch.manual_seed(int(letkf_args.seed))
-    # # args.test_only = True  # Set test_only to True for analysis
-    # test_loader = get_dataloader(letkf_args, test_only=True)
-    # H_info = partial_obs_operator(letkf_args.ori_dim, letkf_args.obs_inds, letkf_args.device)
+    # args.test_only = True  # Set test_only to True for analysis
+    test_loader = get_dataloader(letkf_args, test_only=True)
+    H_info = partial_obs_operator(letkf_args.ori_dim, letkf_args.obs_inds, letkf_args.device)
 
-    # letkf_rrmse, noise = test_ClassicFilter_v2(test_loader, letkf_args, plot=True, H_info=H_info, plot_figures=False,
-    #             save_pdf=True, infl=infl, loc_radius=loc_radius)
-    # # # letkf_rrmse, noise = test_ClassicFilter(
-    # # #     test_loader, letkf_args, access_to_noise=True, plot=True, H_info=H_info,
-    # # #     plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
-    # # # )
-    # torch.save({'rrmse': letkf_rrmse, 'noise': noise}, 'results/letkf_rrmse_l96_approx_H_and_gamma.pt')
+    letkf_rrmse, noise = test_ClassicFilter_v2(test_loader, letkf_args, plot=True, H_info=H_info, plot_figures=False,
+                save_pdf=True, infl=1.02, loc_radius=5)
+    # # letkf_rrmse, noise = test_ClassicFilter(
+    # #     test_loader, letkf_args, access_to_noise=True, plot=True, H_info=H_info,
+    # #     plot_figures=False, loc_radius=loc_radius, infl=infl, save_pdf=False
+    # # )
+    # torch.save({'rrmse': letkf_rrmse, 'noise': noise}, 'results/letkf_rrmse_ks_larger_noise_random_h.pt')
+    # letkf_data = torch.load('results/letkf_rrmse_l96_larger_noise_random_h.pt')
+    # letkf_rrmse = letkf_data['rrmse']
+    # letkf_noise = letkf_data['noise']
     # for num in letkf_rrmse:
     #     print(num)
 
@@ -319,7 +331,7 @@ if __name__ == '__main__':
     # # # model_args.plot = args.plot
     model_args.N = 10
     model_args.v = 'Affine-ydagger'
-    model_args.dataset = 'lorenz63'
+    model_args.dataset = 'ks'
     # # model_args.cp_load_path = 'save/2025-07-24_14-27lorenz96_1.0_10_60_8192_nl2_joint_Affine-ydagger/cp_1000.pth'
     # # # # # model_args.cp_load_path = 'save/2025-08-04_15-29lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger/cp_1000.pth'
     # # # # # model_args.cp_load_path = 'save/2025-08-04_15-29lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger/cp_1000.pth'
@@ -327,14 +339,78 @@ if __name__ == '__main__':
     # # # # # model_args.cp_load_path = 'save/2025-08-04_23-43lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger_new_08041529_l63/cp_2000.pth'
     # # # # model_args.cp_load_path = 'save/2025-08-05_11-41lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger_2k_1k_l63_tuned/cp_1000.pth'
     # model_args.cp_load_path = 'save/2025-08-05_11-42lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_2k_1k_l96_tuned/cp_1000.pth'
-    model_args.cp_load_path = 'save/2025-08-08_20-06lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_l63/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2025-08-08_20-06lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_l63/cp_3000.pth'
     # model_args.cp_load_path = 'save/2025-08-08_20-07lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_l96/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-01-30_23-58lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_l96/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-03-08_00-19lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_0.5_2/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-03-28_03-16lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-03-29_22-38lorenz63_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_l63_sigma_y_1_2/cp_3000.pth'
+    model_args.cp_load_path = 'save/2026-04-03_16-51ks_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_ks_sigma_y_1_2/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-04-24_17-40lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_local/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-05-26_14-33lorenz96_None_10_60_8192_es_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_st250k/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-05-30_16-04lorenz96_None_10_60_8192_es_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_st250k/cp_700.pth'
+    # model_args.cp_load_path = 'save/2026-04-29_22-16lorenz96_None_10_60_8192_nl2_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_st250k/cp_3000.pth'
+    # model_args.cp_load_path = 'save/2026-05-31_18-29lorenz96_1.0_10_60_8192_es_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_st250k/cp_1100.pth'
+    # model_args.cp_load_path = 'save/2026-06-03_19-46lorenz96_None_10_60_8192_es_joint_Affine-ydagger_1k_randomH_l96_sigma_y_1_2_infl_st250k/cp_1000.pth'
+    model_args.seed = 42
+    model_args.random_noise = True  # Set access to noise for model
+    model_args.no_localization = True
+    model_args.test_traj_num = 64
+    model_args.test_batch_size = 64
+    model_args.use_data_parallel = False
+    model_args.random_h = True
+    if model_args.seed is not None and model_args.seed != "None":
+        torch.manual_seed(int(model_args.seed))
+    args.test_only = True  # Set test_only to True for analysis
+    test_loader = get_dataloader(model_args, test_only=True)
+    model_list = set_models(model_args)
+    H_info = partial_obs_operator(model_args.ori_dim, model_args.obs_inds, model_args.device)
+
+    if model_args.v == 'Affine-ydagger':
+        print('here')
+        model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
+    else:
+        model, infl_model, local_model, st_model1, st_model2 = model_list
+
+    # # # optimizer
+    # optimizer, scheduler = setup_optimizer_and_scheduler(model_list, model_args)
+    folder_name = model_args.cp_load_path.split('/')[1]
+    import os
+    output_dir = os.path.join("testing", folder_name)
+    os.makedirs(output_dir, exist_ok=True)
+    if model_args.cp_load_path != "no":
+        load_checkpoint(model_list, None, None, filename=model_args.cp_load_path, use_data_parallel=False)
+        for name, net in zip(
+            ['model_Avhat','model_Ayhat','model_Aydag','infl_model','local_model','st_model1','st_model2'],
+            model_list
+        ):
+            net.eval()
+        print("Test Only")
+    model_rrmse, model_noise = \
+            test_model(test_loader, model_list, model_args, H_info=H_info, plot_figures=False, fig_name=f'testing/{folder_name}/test_only_{args.N}', analysis = False, plot=True)
+    print(f'Model RRMSE: {model_rrmse}, Model Noise: {model_noise}')
+    # mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor = \
+    #         test_model(test_loader, model_list, model_args, H_info=H_info, plot_figures=False, fig_name=f'testing/{folder_name}/test_only_{args.N}', analysis = False, plot=False)
+    # print(f"RMSE: {mean_rmse:.3f} ± {std_rmse:.3f}")
+    # print(f"RRMSE: {mean_rrmse:.3f} ± {std_rrmse:.3f}")
+    # print(f"RMV: {mean_rmv:.3f} ± {std_rmv:.3f}")
+    # print(f"CRPS: {mean_crps:.3f} ± {std_crps:.3f}")
+    # torch.save({'rrmse': model_rrmse, 'noise': noise}, 'results/model_rrmse_l96_3k_sigma^2.pt')
+
+    # model_args = args
+    # model_args.test_only = True  # Set test_only to True for analysis
+    # # # # model_args.plot = args.plot
+    # model_args.N = 100
+    # model_args.v = 'Affine-ydagger'
+    # model_args.dataset = 'lorenz96'
+    # model_args.cp_load_path = 'save/2026-04-27_20-20lorenz96_None_20_60_8192_nl2_joint_Affine-ydagger_tuned/ft_cp_100_50.pth'
     # model_args.seed = 42
     # model_args.random_noise = True  # Set access to noise for model
     # model_args.no_localization = True
-    # model_args.test_traj_num = 64*16
+    # model_args.test_traj_num = 64
     # model_args.test_batch_size = 64
     # model_args.use_data_parallel = False
+    # model_args.random_h = True
     # if model_args.seed is not None and model_args.seed != "None":
     #     torch.manual_seed(int(model_args.seed))
     # args.test_only = True  # Set test_only to True for analysis
@@ -343,38 +419,33 @@ if __name__ == '__main__':
     # H_info = partial_obs_operator(model_args.ori_dim, model_args.obs_inds, model_args.device)
 
     # if model_args.v == 'Affine-ydagger':
+    #     print('here')
     #     model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
     # else:
     #     model, infl_model, local_model, st_model1, st_model2 = model_list
 
-    # # # optimizer
-    # optimizer, scheduler = setup_optimizer_and_scheduler(model_list, model_args)
-    folder_name = model_args.cp_load_path.split('/')[1]
-    import os
-    output_dir = os.path.join("testing", folder_name)
-    os.makedirs(output_dir, exist_ok=True)
+    # # # # optimizer
+    # # optimizer, scheduler = setup_optimizer_and_scheduler(model_list, model_args)
+    # folder_name = model_args.cp_load_path.split('/')[1]
+    # import os
+    # output_dir = os.path.join("testing", folder_name)
+    # os.makedirs(output_dir, exist_ok=True)
     # if model_args.cp_load_path != "no":
     #     load_checkpoint(model_list, None, None, filename=model_args.cp_load_path, use_data_parallel=False)
-    #     # for name, net in zip(
-    #     #     ['model_Avhat','model_Ayhat','model_Aydag','infl_model','local_model','st_model1','st_model2'],
-    #     #     model_list
-    #     # ):
-    #     #     net.eval()
-    #     # print("Test Only")
-    # model_rrmse, model_noise = \
+    #     for name, net in zip(
+    #         ['model_Avhat','model_Ayhat','model_Aydag','infl_model','local_model','st_model1','st_model2'],
+    #         model_list
+    #     ):
+    #         net.eval()
+    #     print("Test Only")
+    # model2_rrmse, model2_noise = \
     #         test_model(test_loader, model_list, model_args, H_info=H_info, plot_figures=False, fig_name=f'testing/{folder_name}/test_only_{args.N}', analysis = False, plot=True)
-    # mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor = \
-    #         test_model(test_loader, model_list, model_args, H_info=H_info, plot_figures=False, fig_name=f'testing/{folder_name}/test_only_{args.N}', analysis = False, plot=False)
-    # print(f"RMSE: {mean_rmse:.3f} ± {std_rmse:.3f}")
-    # print(f"RRMSE: {mean_rrmse:.3f} ± {std_rrmse:.3f}")
-    # print(f"RMV: {mean_rmv:.3f} ± {std_rmv:.3f}")
-    # print(f"CRPS: {mean_crps:.3f} ± {std_crps:.3f}")
-    # torch.save({'rrmse': model_rrmse, 'noise': noise}, 'results/model_rrmse_l96_3k_sigma^2.pt')
-    model_data = torch.load('results/model_rrmse_l63_3k_sigma^2.pt')
-    model_rrmse = model_data['rrmse']
-    model_noise = model_data['noise']
+
+    # model_data = torch.load('results/model_rrmse_l63_3k_sigma^2.pt')
+    # model_rrmse = model_data['rrmse']
+    # model_noise = model_data['noise']
     #plot enkf_rrmse and model_rrmse as scatter plot
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(15, 6))
     # cat model_noise to itself 4 times
     # model_noise = model_noise.repeat(4)
     # enkf_noise = noise.repeat(4)
@@ -388,30 +459,49 @@ if __name__ == '__main__':
     plt.rcParams['ytick.labelsize'] = 16
     # for i in range(ienkf_rrmse.shape[0]):
     #     print(ienkf_rrmse[i])
-    _model_rrmse = model_rrmse.view(16, 64).mean(dim=0)
+    _model_rrmse = model_rrmse.view(1, 64).mean(dim=0)
+    # _model2_rrmse = model2_rrmse.view(1, 64).mean(dim=0)
     # _ienkf_rrmse = ienkf_rrmse.view(16, 64).mean(dim=0)
-    _ienkf_rrmse = torch.nanmean(ienkf_rrmse.view(16, 64), dim=0)
-    _enkf_rrmse = enkf_rrmse.view(16, 64).mean(dim=0)
+    # _ienkf_rrmse = torch.nanmean(ienkf_rrmse.view(1, 64), dim=0)
+    _enkf_rrmse = enkf_rrmse.view(1, 64).mean(dim=0)
     # _no_noise_enkf_rrmse = enkf_no_noise_rrmse.view(16, 64).mean(dim=0)
+    _esrf_rrmse = esrf_rrmse.view(1, 64).mean(dim=0)
     # _esrf_rrmse = esrf_rrmse.view(16, 64).mean(dim=0)
-    # _esrf_rrmse = esrf_rrmse.view(16, 64).mean(dim=0)
-    # _letkf_rrmse = letkf_rrmse.view(16, 64).mean(dim=0)
+    _letkf_rrmse = letkf_rrmse.view(1, 64).mean(dim=0)
     plt.plot(model_noise.cpu().numpy(), _model_rrmse.cpu().numpy(), label='Ours', color = 'blue')
+    # plt.plot(model2_noise.cpu().numpy(), _model2_rrmse.cpu().numpy(), label='Ours (Fine-tuned)', color = 'green')
     plt.plot(noise.cpu().numpy(), _enkf_rrmse.cpu().numpy(), label='EnKF', color='red')
-    # plt.plot(noise.cpu().numpy(), _esrf_rrmse.cpu().numpy(), label='ESRF', color='green')
-    plt.plot(noise.cpu().numpy(), _ienkf_rrmse.cpu().numpy(), label='iEnKF', color='black')
-    # plt.plot(noise.cpu().numpy(), _letkf_rrmse.cpu().numpy(), label='LETKF', color='black')
+    plt.plot(noise.cpu().numpy(), _esrf_rrmse.cpu().numpy(), label='ESRF', color='green')
+    # plt.plot(noise.cpu().numpy(), _ienkf_rrmse.cpu().numpy(), label='iEnKF', color='black')
+    plt.plot(noise.cpu().numpy(), _letkf_rrmse.cpu().numpy(), label='LETKF', color='black')
     # plt.plot(noise.cpu().numpy(), _no_noise_enkf_rrmse.cpu().numpy(), label='EnKF (No Noise Access)', color='purple')
     # use bbox to make legend outside the plot to the right
     # plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
     # plt.tight_layout(rect=[0.05, 0.05, 0.95, 0.95])  # leave 20% space on right
-    plt.legend()
-    plt.title('RRMSE vs Noise, Lorenz 63 Model')
+    # plot two vertical lines at x = 1 and x = 2
+    plt.axvline(x=1, color='gray', linestyle='--', label='Model Train Range Min')
+    plt.axvline(x=2, color='gray', linestyle='--', label='Model Train Range Max')
+    plt.legend(
+        loc='upper left',
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
+        frameon=True
+    )
+
+    plt.tight_layout(rect=[0, 0, 0.78, 1])
+
+    
+    plt.title('RRMSE vs Noise, KS Model')
     #convert the sigma_y to latex format
     plt.xlabel('Obs Noise, $\sigma_y$')
     plt.ylabel('RRMSE')
     plt.grid(True)
-    plt.savefig(os.path.join(output_dir, 'rrmse_vs_noise.png'))
+    plt.savefig(
+        os.path.join(output_dir, 'rrmse_vs_noise_idk2_noH_noG.png'),
+        bbox_inches='tight',
+        dpi=300
+    )
+    # plt.savefig(os.path.join(output_dir, 'rrmse_vs_noise_idk2_H_noG.png'))
     plt.close()
 
     #make a plot showing the success rate of each method at each noise level, where success

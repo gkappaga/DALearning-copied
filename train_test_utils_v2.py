@@ -1156,7 +1156,6 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
 
         return H_fun_step, H
 
-    print(args)
     m = args.N
     if args.dataset == "lorenz63":
         forward_fun = L63.forward
@@ -1267,27 +1266,8 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     sigma_y_batch = torch.full((B,), args.sigma_y, device=args.device)
 
                 if args.random_h:
-                    # selected_inds = torch.rand(1, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # (B, obs_dim)
-                    # selected_inds = selected_inds.expand(B, -1)  # (B, obs_dim)
                     H_fun_step, H = make_random_H_step(args, B, ens_v_a.dtype)
                     H_matrices = H.transpose(1, 2).contiguous()
-                    #print the observation indices that are equal to 1 for each batch
-                    # print(f"Time step {i + 1}: Randomly selected observation indices for each batch item:")
-                    # for b in range(B):
-                    #     print(f"  Batch {b + 1}: {torch.where(H[b] == 1)[1].tolist()}")
-                    # selected_inds_1 = torch.randperm(args.ori_dim, device=args.device)[:args.obs_dim]  # (obs_dim,)
-
-                    # # If later code expects (B, obs_dim):
-                    # selected_inds = selected_inds_1.unsqueeze(0).expand(B, -1)
-
-                    # # H: (B, obs_dim, ori_dim)
-                    # H = torch.nn.functional.one_hot(selected_inds, num_classes=args.ori_dim).to(dtype=ens_v_a.dtype)
-
-                    # # H_matrices: (B, ori_dim, obs_dim) for right-multiplying state vectors
-                    # H_matrices = H.transpose(1, 2).to(args.device)
-                    # def H_fun_step(V):
-                    #     # V: (B, N, D) -> (B, N, obs_dim)
-                    #     return torch.bmm(V, H_matrices)
                 else:
                     H_fun, H = H_info  # only meaningful if args.access_to_H expects it
                     def H_fun_step(V):
@@ -1297,10 +1277,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 obs_y = obs_y + sigma_y_batch.view(-1, 1, 1) * torch.randn_like(obs_y, device=args.device)
                 if args.random_h:
                     obs_y_list.append(obs_y)
-                    _trap("obs_y", obs_y, i)
-
-            
-                # obs_y = obs_y_list[i + 1]
+                    
                 if args.v.startswith('iEnKS'):
                     ens_v_f = ens_v_a
                 else:
@@ -1314,7 +1291,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     ens_v_f = ens_v_a_forecast_input.view(-1, m, args.ori_dim)
                     
                     ens_v_f += torch.randn_like(ens_v_f, device=args.device) * args.sigma_v
-                    _trap("ens_v_f", ens_v_f, i)
+                    # _trap("ens_v_f", ens_v_f, i)
                 
                 B_shape, N_ens, D_state = ens_v_f.shape
                 d_obs_shape = obs_y.shape[2]
@@ -1356,7 +1333,10 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                             v_i = v_ens[n]
                             eta = sigma_y_batch[traj] * torch.randn(args.obs_dim, device=args.device)
                             eta_samples.append(eta)
-                            y_i = H_fun_step(v_i.view(1,1,-1)).view(-1) + eta
+                            if args.random_h:
+                                y_i = v_i @ H_matrices[traj] + eta
+                            else:
+                                y_i = H_fun_step(v_i.view(1, 1, -1)).view(-1) + eta
                             y_samples.append(y_i)
                         Y = torch.stack(y_samples, dim=0).squeeze(1)
                         V = v_ens
@@ -1486,7 +1466,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                     ens_v_a, _ = ensemble_kalman_filter_analysis(
                         ens_v_f, **common_enkf_args, method='ESRF',
                         localization_matrix_Lxy=loc_mat_vy, localization_matrix_Lyy=loc_mat_yy)
-                    _trap("ens_v_a", ens_v_a, t)
+                    # _trap("ens_v_a", ens_v_a, t)
                 elif args.v == 'LETKF':
                     coords_state = torch.arange(D_state, device=args.device, dtype=batch_v.dtype).unsqueeze(1)
                     if args.random_h:
@@ -1627,21 +1607,63 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 rmse_val = torch.mean(torch.sqrt(torch.mean((ens_tensor.mean(dim=2) - batch_v) ** 2, dim=2)), dim=0)
                 rms_val = torch.mean(torch.sqrt(torch.mean((batch_v) ** 2, dim=2)), dim=0)
                 rrmse_val = rmse_val / rms_val
-                # rmv_val = torch.mean(torch.sqrt(N_ens / (N_ens-1) * torch.mean((ens_tensor - batch_v.unsqueeze(2)) ** 2, dim=(2,3))),dim=0)
-                T = ens_tensor.shape[0]
-                B = ens_tensor.shape[1]
-                N_ens = ens_tensor.shape[2]
-                scale = N_ens / (N_ens - 1)
+                rmv_val = torch.mean(torch.sqrt(N_ens / (N_ens-1) * torch.mean((ens_tensor - batch_v.unsqueeze(2)) ** 2, dim=(2,3))),dim=0)
+                # T = ens_tensor.shape[0]
+                # B = ens_tensor.shape[1]
+                # N_ens = ens_tensor.shape[2]
+                # scale = N_ens / (N_ens - 1)
 
-                rmv_acc = torch.zeros(B, device=ens_tensor.device, dtype=ens_tensor.dtype)
+                # rmv_acc = torch.zeros(B, device=ens_tensor.device, dtype=ens_tensor.dtype)
 
-                for t in range(T):
-                    # [B, N_ens, D] minus [B, 1, D] -> [B, N_ens, D]
-                    diff = ens_tensor[t] - batch_v[t].unsqueeze(1)
-                    mse  = diff.square().mean(dim=(1, 2))          # [B]
-                    rmv_acc += torch.sqrt(scale * mse)             # [B]
+                # for t in range(T):
+                #     # [B, N_ens, D] minus [B, 1, D] -> [B, N_ens, D]
+                #     diff = ens_tensor[t] - batch_v[t].unsqueeze(1)
+                #     mse  = diff.square().mean(dim=(1, 2))          # [B]
+                #     rmv_acc += torch.sqrt(scale * mse)             # [B]
 
-                rmv_val = rmv_acc / T
+                # rmv_val = rmv_acc / T
+
+                # T = len(ens_list)
+                # B = batch_v.shape[1]
+                # device = batch_v.device
+                # dtype = batch_v.dtype
+
+                # rmse_acc = torch.zeros(B, device=device, dtype=dtype)
+                # rmv_acc = torch.zeros(B, device=device, dtype=dtype)
+                # crps_acc = torch.zeros(B, device=device, dtype=dtype)
+                # rms_acc = torch.zeros(B, device=device, dtype=dtype)
+                # true_norm_acc = torch.zeros(B, device=device, dtype=dtype)
+
+                # scale = args.N / max(args.N - 1, 1)
+
+                # for t, ens_t in enumerate(ens_list):
+                #     true_t = batch_v[t]  # [B, D]
+
+                #     # RMSE contribution
+                #     mean_t = ens_t.mean(dim=1)  # [B, D]
+                #     rmse_acc += torch.sqrt(torch.mean((mean_t - true_t) ** 2, dim=1))
+
+                #     # RMV contribution
+                #     diff_t = ens_t - true_t.unsqueeze(1)  # [B, N, D]
+                #     rmv_acc += torch.sqrt(scale * torch.mean(diff_t ** 2, dim=(1, 2)))
+
+                #     # CRPS / ES contribution: one timestep only
+                #     crps_acc += compute_es(
+                #         ens_states=ens_t.unsqueeze(0),     # [1, B, N, D]
+                #         true_states=true_t.unsqueeze(0),   # [1, B, D]
+                #         norm_p=1
+                #     ).squeeze(0)
+
+                #     # denominators
+                #     rms_acc += torch.sqrt(torch.mean(true_t ** 2, dim=1))
+                #     true_norm_acc += torch.norm(true_t, p=2, dim=1)
+
+                # rmse_val = rmse_acc / T
+                # rmv_val = rmv_acc / T
+                # crps_val = crps_acc / T
+                # rms_val = rms_acc / T
+                # rrmse_val = rmse_val / rms_val
+                # rcrps_val = crps_val / (true_norm_acc / T)
                 
                 all_results['rmse'] = torch.cat((all_results['rmse'], rmse_val))
                 all_results['rmv'] = torch.cat((all_results['rmv'], rmv_val))
@@ -1768,7 +1790,7 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
     if plot:
         if args.random_noise:
             return all_results['rrmse'], sigma_y_batch
-        return all_results['rrmse'].mean().item()
+        return all_results['rrmse'].mean().item(), args.sigma_y
     print(final_metrics)
     return final_metrics
 

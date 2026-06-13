@@ -159,11 +159,12 @@ if __name__ == "__main__":
     args = get_parameters()
     args.test_only = True  # Set test_only to True for analysis
     # enkf_args.plot = args.plot
-    args.N = 20
-    args.v = 'ESRF'  # Set the method to EnKF for testing
+    args.N = 10
+    args.v = 'LETKF'  # Set the method to EnKF for testing
     args.dataset = 'lorenz96'
     args.cp_load_path = 'no'  # No checkpoint loading for this test
     args.seed = 42
+    # args.sigma_y = 1
     args.random_noise = True  # Set access to noise for EnKF
     args.access_to_noise = True  # Access to noise for EnKF
     args.test_traj_num = 64
@@ -219,7 +220,7 @@ if __name__ == "__main__":
         loss_list_nn = []
         # mean_rmse_nn, std_rmse_nn, mean_rmv_nn, std_rmv_nn, mean_rrmse_nn, std_rrmse_nn, mean_crps_nn, std_crps_nn, no_nan_percent_nn = \
         #     test_ClassicFilter(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, access_to_noise=True, infl=infl, loc_radius=loc_radius)
-        rmse = test_ClassicFilter_v2(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=1.1, loc_radius=None)
+        rmse = test_ClassicFilter_v2(test_loader, args, plot=False, H_info=H_info, plot_figures=False, fig_name=f'{folder_name}/test_{args.N}', save_pdf=True, infl=1.1, loc_radius=1)
         # print(f"RMSE: {mean_rmse_nn:.3f} ± {std_rmse_nn:.3f}")
         # print(f"RRMSE: {mean_rrmse_nn:.3f} ± {std_rrmse_nn:.3f}")
         # print(f"RMV: {mean_rmv_nn:.3f} ± {std_rmv_nn:.3f}")

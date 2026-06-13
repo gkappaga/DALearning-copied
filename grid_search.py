@@ -268,6 +268,8 @@ def main(grid_search_info):
         args.test_only = True
         args.test_traj_num = 64
         args.test_batch_size = 64
+        args.access_to_noise = True  # Access to noise for EnKF
+        args.access_to_H = True
         # args.N = 20
         # args.v = 'ESRF'
         args.obs_inds = torch.arange(0, args.ori_dim, args.ori_dim // args.obs_dim)

@@ -15,7 +15,7 @@ from training_utils import train_model, test_model, set_models
 
 if __name__ == "__main__":
     args = get_parameters()
-    
+    print(args)
     if not os.path.isdir(args.save_folder):
         os.makedirs(args.save_folder)
 
@@ -43,8 +43,9 @@ if __name__ == "__main__":
 
 
         ##################### fine-tuning on different N
-        N_list = [5, 10, 15, 20, 40, 60, 100]
-        # N_list = [20, 40]
+        # N_list = [5, 10, 15, 20, 40, 60, 100]
+        N_list = [100]
+        # N_list = [40, 100]
         ori_batch_size = args.batch_size
 
         for N in N_list:

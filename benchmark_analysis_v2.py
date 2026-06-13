@@ -5,7 +5,6 @@ import math
 import time # For timing analysis steps
 from tqdm import tqdm
 from localization import pairwise_distances, dist2coeff
-from smf_rbf_analysis import *
 
 # import matplotlib.pyplot as plt # Uncomment for plotting GC test or RMSEs
 
@@ -1526,60 +1525,43 @@ def _letkf_analysis(
         # Case 2: batched observation coordinates (exact behavior)
         # ------------------------------------------------------------
         elif coords_obs.ndim == 3:
-            updated_mean_all = current_mean_f_k.clone()                      # (B, 1)
-            updated_A_all = current_Af_k.clone()                             # (B, N, 1)
+            # Fast batched path for batch-varying observation locations.
+            # Assumes 1D coordinates, which is exactly how LETKF is called from
+            # test_ClassicFilter_v2 for random_h:
+            #   coords_state: (d_state, 1)
+            #   coords_obs:   (B, d_obs, 1)
+            #   domain:       tensor([D_state])
 
-            coord_k_state = coords_state[k_state_idx].unsqueeze(0)           # (1, D_coord)
 
-            for b in range(batch_size):
-                coords_obs_b = coords_obs[b]                                 # (d_obs, D_coord)
+            # state coordinate for this local analysis point: scalar -> (1,)
+            state_coord = coords_state[k_state_idx, 0].to(device=device, dtype=dtype)   # scalar-ish
 
-                dist_state_k_to_obs_b = pairwise_distances(
-                    coord_k_state, coords_obs_b, domain=domain
-                ).squeeze(0)                                                 # (d_obs,)
+            # observation coordinates for all batches: (B, d_obs)
+            obs_coords = coords_obs[..., 0].to(device=device, dtype=dtype)               # (B, d_obs)
 
-                rho_k_b = dist2coeff(dist_state_k_to_obs_b, localization_radius)  # (d_obs,)
-                local_obs_indices_b = torch.where(rho_k_b > 1e-6)[0]
+            # 1D cyclic distance, matching your current LETKF caller
+            dist = torch.abs(obs_coords - state_coord)                                   # (B, d_obs)
+            if domain is not None:
+                dom = torch.as_tensor(domain, device=device, dtype=dtype).flatten()[0]
+                dist = torch.minimum(dist, dom - dist)
 
-                if len(local_obs_indices_b) == 0:
-                    continue
+            # Batch-specific localization weights
+            rho_k = dist2coeff(dist, localization_radius)                                # (B, d_obs)
+            sqrt_rho_k = torch.sqrt(torch.clamp(rho_k, min=0.0)).unsqueeze(1)            # (B, 1, d_obs)
 
-                AYf_local_b = AYf_global_transformed[b:b+1, :, local_obs_indices_b]               # (1, N, n_loc_b)
-                innov_local_b = innovation_mean_global_transformed[b:b+1, :, local_obs_indices_b] # (1, 1, n_loc_b)
+            # Weight all obs dims at once instead of slicing different local subsets per batch.
+            # Zero localization weight effectively removes that observation from that batch.
+            eff_AYf_k_anom = AYf_global_transformed * sqrt_rho_k                         # (B, N, d_obs)
+            eff_innov_k = (innovation_mean_global_transformed * sqrt_rho_k).squeeze(1)   # (B, d_obs)
 
-                rho_local_b = rho_k_b[local_obs_indices_b]                                         # (n_loc_b,)
-                sqrt_rho_local_b = torch.sqrt(rho_local_b).view(1, 1, -1)
+            updated_mean_k, updated_A_k = _letkf_core_etkf_update(
+                current_mean_f_k, current_Af_k,
+                eff_AYf_k_anom, eff_innov_k, N_ensemble
+            )
 
-                eff_AYf_b = AYf_local_b * sqrt_rho_local_b
-                eff_innov_b = (innov_local_b * sqrt_rho_local_b).squeeze(1)                        # (1, n_loc_b)
-
-                if Gamma_Tildes is not None:
-                    # Subselect the observation-noise matrix to the local obs set for this batch
-                    Gamma_b = Gamma_Tildes[b:b+1][:, local_obs_indices_b][:, :, local_obs_indices_b]   # (1, n_loc_b, n_loc_b)
-
-                    eps = 1e-3
-                    dloc = Gamma_b.shape[-1]
-                    jitter = eps * torch.eye(dloc, device=device, dtype=dtype).unsqueeze(0)
-                    Gamma_b_pd = Gamma_b + jitter
-                    L_b = torch.linalg.cholesky(Gamma_b_pd)
-                    Gamma_inv_sqrt_b = torch.linalg.pinv(L_b)
-
-                    updated_mean_b, updated_A_b = _letkf_core_etkf_update(
-                        current_mean_f_k[b:b+1], current_Af_k[b:b+1],
-                        eff_AYf_b, eff_innov_b, N_ensemble,
-                        Gamma_inv_sqrt=Gamma_inv_sqrt_b
-                    )
-                else:
-                    updated_mean_b, updated_A_b = _letkf_core_etkf_update(
-                        current_mean_f_k[b:b+1], current_Af_k[b:b+1],
-                        eff_AYf_b, eff_innov_b, N_ensemble
-                    )
-
-                updated_mean_all[b:b+1] = updated_mean_b
-                updated_A_all[b:b+1] = updated_A_b
-
-            ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_all
-            ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_all.squeeze(-1)
+            ensemble_a_mean_parts[:, :, k_state_idx] = updated_mean_k
+            ensemble_a_anom_parts[:, :, k_state_idx] = updated_A_k.squeeze(-1)
+            
 
         else:
             raise ValueError(f"coords_obs must have ndim 2 or 3, got shape {coords_obs.shape}")
@@ -1832,84 +1814,281 @@ def _ienks_analysis(
         final_X_smoothed = torch.zeros_like(X0_global)
 
         for k_state_idx in range(D_state):
-            coord_k_state = coords_state[k_state_idx].unsqueeze(0)
-            dist_k_to_obs = pairwise_distances(coord_k_state, coords_obs, domain=domain).squeeze(0)
-            rho_k = dist2coeff(dist_k_to_obs, localization_radius)
-            local_obs_indices = torch.where(rho_k > 1e-6)[0]
-
             X0_k = X0_global[:, :, k_state_idx].unsqueeze(-1)
 
-            if len(local_obs_indices) == 0:
-                final_delta_mean[:, :, k_state_idx] = 0.0
-                final_X_smoothed[:, :, k_state_idx] = X0_k.squeeze(-1)
-                continue
+            # ============================================================
+            # Case 1: shared observation coordinates
+            # coords_obs: (d_obs, D_coord)
+            # ============================================================
+            if coords_obs.ndim == 2:
+                coord_k_state = coords_state[k_state_idx].unsqueeze(0)
+
+                dist_k_to_obs = pairwise_distances(
+                    coord_k_state,
+                    coords_obs,
+                    domain=domain
+                ).squeeze(0)
+
+                rho_k = dist2coeff(dist_k_to_obs, localization_radius)
+                local_obs_indices = torch.where(rho_k > 1e-6)[0]
+
+                if len(local_obs_indices) == 0:
+                    final_delta_mean[:, :, k_state_idx] = 0.0
+                    final_X_smoothed[:, :, k_state_idx] = X0_k.squeeze(-1)
+                    continue
+                
+                y_eff_for_k = y[:, local_obs_indices]
+
+                rho_local_k = rho_k[local_obs_indices]
+                sqrt_rho_bcast = torch.sqrt(
+                    torch.clamp(rho_local_k, min=0.0)
+                ).view(1, 1, -1)
+
+                use_random_h = False
+
+            # ============================================================
+            # Case 2: random H / batch-varying observation coordinates
+            # coords_obs: (B, d_obs, 1)
+            # ============================================================
+            elif coords_obs.ndim == 3:
+                state_coord = coords_state[k_state_idx, 0].to(
+                    device=device,
+                    dtype=dtype
+                )
+
+                obs_coords = coords_obs[..., 0].to(
+                    device=device,
+                    dtype=dtype
+                )
+
+                dist_k_to_obs = torch.abs(obs_coords - state_coord)
+
+                if domain is not None:
+                    dom = torch.as_tensor(
+                        domain,
+                        device=device,
+                        dtype=dtype
+                    ).flatten()[0]
+
+                    dist_k_to_obs = torch.minimum(
+                        dist_k_to_obs,
+                        dom - dist_k_to_obs
+                    )
+
+                rho_k = dist2coeff(dist_k_to_obs, localization_radius)
+
+                sqrt_rho_bcast = torch.sqrt(
+                    torch.clamp(rho_k, min=0.0)
+                ).unsqueeze(1)
+
+                y_eff_for_k = y
+
+                use_random_h = True
+
+            else:
+                raise ValueError(
+                    f"coords_obs must have ndim 2 or 3, got shape {coords_obs.shape}"
+                )
             
-            y_local = y[:, local_obs_indices]
-            rho_local_k = rho_k[local_obs_indices]
-            sqrt_rho_bcast = torch.sqrt(rho_local_k).view(1, 1, -1)
-            
-            w_k = torch.zeros(B, N, 1, device=device, dtype=dtype)
-            T_k = torch.eye(N, device=device, dtype=dtype).unsqueeze(0).expand(B, -1, -1)
+            w_k = torch.zeros(
+                B,
+                N,
+                1,
+                device=device,
+                dtype=dtype
+            )
+
+            T_k = torch.eye(
+                N,
+                device=device,
+                dtype=dtype
+            ).unsqueeze(0).expand(B, -1, -1)
+
             D_pert_local = None
 
             for iteration in range(nIter):
-                E_iter = x0_global + T_k @ X0_global + (X0_global.transpose(-2, -1) @ w_k).transpose(-1, -2)
+                E_iter = (
+                    x0_global
+                    + T_k @ X0_global
+                    + (X0_global.transpose(-2, -1) @ w_k).transpose(-1, -2)
+                )
+
                 E_fwd = propagate_ensemble_in_window(E_iter)
                 Eo = observation_operator_ens(E_fwd)
 
-                Eo_local = Eo[:, :, local_obs_indices]
-                Y_local, xo_obs_local = center_ensemble(Eo_local)
-                # dy_local_eff = (y_local.unsqueeze(1) - xo_obs_local) * R_inv_sqrt * sqrt_rho_bcast
-                # Y_local_eff = Y_local * R_inv_sqrt * sqrt_rho_bcast
-                if Gamma_Tildes is not None:   # full Gamma case
-                    # Extract block corresponding to local obs
-                    R_inv_sqrt_local = R_inv_sqrt[:, local_obs_indices][:, :, local_obs_indices]  # (B, n_local, n_local)
-                    # R_inv_sqrt_local = torch.stack([
-                    #     R_inv_sqrt[b][local_obs_indices][:, local_obs_indices] for b in range(B)
-                    # ], dim=0)
-                    dy_local_eff = (y_local.unsqueeze(1) - xo_obs_local) @ R_inv_sqrt_local.transpose(-2,-1)
-                    Y_local_eff  = Y_local @ R_inv_sqrt_local.transpose(-2,-1)
-                    # then apply localization
-                    dy_local_eff = dy_local_eff * sqrt_rho_bcast
-                    Y_local_eff  = Y_local_eff * sqrt_rho_bcast
-                else:  # diag case
-                    dy_local_eff = (y_local.unsqueeze(1) - xo_obs_local) * R_inv_sqrt * sqrt_rho_bcast
-                    Y_local_eff  = Y_local * R_inv_sqrt * sqrt_rho_bcast
+                # ========================================================
+                # Shared-coordinates path:
+                # select the same local obs indices for every batch item.
+                # ========================================================
+                if not use_random_h:
+                    Eo_local = Eo[:, :, local_obs_indices]
+                    Y_local, xo_obs_local = center_ensemble(Eo_local)
+
+                    if Gamma_Tildes is not None:
+                        R_inv_sqrt_local = R_inv_sqrt[:, local_obs_indices][:, :, local_obs_indices]
+
+                        dy_local_eff = (
+                            (y_eff_for_k.unsqueeze(1) - xo_obs_local)
+                            @ R_inv_sqrt_local.transpose(-2, -1)
+                        )
+
+                        Y_local_eff = (
+                            Y_local
+                            @ R_inv_sqrt_local.transpose(-2, -1)
+                        )
+
+                        dy_local_eff = dy_local_eff * sqrt_rho_bcast
+                        Y_local_eff = Y_local_eff * sqrt_rho_bcast
+
+                    else:
+                        dy_local_eff = (
+                            (y_eff_for_k.unsqueeze(1) - xo_obs_local)
+                            * R_inv_sqrt
+                            * sqrt_rho_bcast
+                        )
+
+                        Y_local_eff = (
+                            Y_local
+                            * R_inv_sqrt
+                            * sqrt_rho_bcast
+                        )
+
+                # ========================================================
+                # Random-H path:
+                # keep all obs dimensions and apply batch-specific
+                # localization weights.
+                # ========================================================
+                else:
+                    Y_all, xo_obs_all = center_ensemble(Eo)
+
+                    if Gamma_Tildes is not None:
+                        dy_local_eff = (
+                            (y_eff_for_k.unsqueeze(1) - xo_obs_all)
+                            @ R_inv_sqrt.transpose(-2, -1)
+                        )
+
+                        Y_local_eff = (
+                            Y_all
+                            @ R_inv_sqrt.transpose(-2, -1)
+                        )
+
+                        dy_local_eff = dy_local_eff * sqrt_rho_bcast
+                        Y_local_eff = Y_local_eff * sqrt_rho_bcast
+
+                    else:
+                        dy_local_eff = (
+                            (y_eff_for_k.unsqueeze(1) - xo_obs_all)
+                            * R_inv_sqrt
+                            * sqrt_rho_bcast
+                        )
+
+                        Y_local_eff = (
+                            Y_all
+                            * R_inv_sqrt
+                            * sqrt_rho_bcast
+                        )
                 
                 za = float(N1)
-                # Tinv_k = torch.linalg.inv(T_k)
-                # Y_iter_local = Tinv_k @ Y_local_eff
+
                 Y_iter_local = torch.linalg.solve(T_k, Y_local_eff)
 
-                C_tilde = (Y_iter_local @ Y_iter_local.transpose(-2, -1)) + za*torch.eye(N, device=device)
-                eig_vals, U = robust_eigh(C_tilde)
-                eig_vals_clamped = torch.clamp(eig_vals, min=1e-9)
-                Cow1 = U @ torch.diag_embed(1.0 / eig_vals_clamped) @ U.transpose(-2, -1)
+                C_tilde = (
+                    Y_iter_local @ Y_iter_local.transpose(-2, -1)
+                    + za * torch.eye(
+                        N,
+                        device=device,
+                        dtype=dtype
+                    ).unsqueeze(0)
+                )
 
-                grad = (Y_iter_local @ dy_local_eff.transpose(-2, -1)) - za * w_k
+                eig_vals, U = robust_eigh(C_tilde)
+
+                eig_vals_clamped = torch.clamp(
+                    eig_vals,
+                    min=1e-9
+                )
+
+                Cow1 = (
+                    U
+                    @ torch.diag_embed(1.0 / eig_vals_clamped)
+                    @ U.transpose(-2, -1)
+                )
+
+                grad = (
+                    Y_iter_local @ dy_local_eff.transpose(-2, -1)
+                    - za * w_k
+                )
+
                 dw_k = Cow1 @ grad
                 
                 if "Sqrt" in upd_a:
-                    T_k = U @ torch.diag_embed(1.0 / torch.sqrt(eig_vals_clamped)) @ U.transpose(-2,-1) * math.sqrt(N1)
+                    T_k = (
+                        U
+                        @ torch.diag_embed(1.0 / torch.sqrt(eig_vals_clamped))
+                        @ U.transpose(-2, -1)
+                        * math.sqrt(N1)
+                    )
+
                 elif "PertObs" in upd_a:
                     if iteration == 0:
                         _D_pert_local = torch.randn_like(Y_local_eff)
-                        D_pert_local = _D_pert_local - _D_pert_local.mean(dim=1, keepdim=True)
-                    gradT_k = -(Y_local_eff + D_pert_local) @ Y_iter_local.transpose(-2, -1) + N1 * (torch.eye(N, device=device) - T_k)
+
+                        D_pert_local = (
+                            _D_pert_local
+                            - _D_pert_local.mean(dim=1, keepdim=True)
+                        )
+
+                    gradT_k = (
+                        -(Y_local_eff + D_pert_local)
+                        @ Y_iter_local.transpose(-2, -1)
+                        + N1 * (
+                            torch.eye(
+                                N,
+                                device=device,
+                                dtype=dtype
+                            ).unsqueeze(0)
+                            - T_k
+                        )
+                    )
+
                     T_k = T_k + gradT_k @ Cow1
+
                 elif "Order1" in upd_a:
-                    gradT_k = -0.5 * Y_local_eff @ Y_iter_local.transpose(-2, -1) + N1 * (torch.eye(N, device=device) - T_k)
+                    gradT_k = (
+                        -0.5 * Y_local_eff @ Y_iter_local.transpose(-2, -1)
+                        + N1 * (
+                            torch.eye(
+                                N,
+                                device=device,
+                                dtype=dtype
+                            ).unsqueeze(0)
+                            - T_k
+                        )
+                    )
+
                     T_k = T_k + gradT_k @ Cow1
                 
                 w_k_new = w_k + dw_k
-                if ((w_k_new - w_k).norm(p=2, dim=1)**2 / N).mean() < wtol: w_k = w_k_new; break
+
+                convergence_measure = (
+                    (w_k_new - w_k).norm(p=2, dim=1) ** 2 / N
+                ).mean()
+
+                if convergence_measure < wtol:
+                    w_k = w_k_new
+                    break
+
                 w_k = w_k_new
             
-            delta_mean_k = (X0_k.transpose(-2, -1) @ w_k).transpose(-1, -2)
+            delta_mean_k = (
+                X0_k.transpose(-2, -1) @ w_k
+            ).transpose(-1, -2)
+
             X_smoothed_k = T_k @ X0_k
+
             final_delta_mean[:, :, k_state_idx] = delta_mean_k.squeeze(-1)
             final_X_smoothed[:, :, k_state_idx] = X_smoothed_k.squeeze(-1)
-            # check_tensor("rho_k", rho_k)
+                # check_tensor("rho_k", rho_k)
             # check_tensor("y_local", y_local)
             # check_tensor("x0_global", x0_global)
             # check_tensor("T_k", T_k)

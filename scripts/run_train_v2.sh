@@ -12,14 +12,13 @@ cd ..
 #     --save_epoch 50 \
 #     --loss_type 'nl2' \
 
-python train.py \
-    --dataset lorenz63 \
+python rrmse_vs_noise.py \
+    --dataset ks \
     --N 10 \
-    --seed 42 \
+    --random_h True \
     --v 'Affine-ydagger' \
-    --epochs 1000 \
-    --save_epoch 50 \
-    --loss_type 'nl2' \
+    --access_to_noise \
+    --access_to_H \
     --random_noise \
 
 # python train.py \

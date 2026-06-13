@@ -33,19 +33,36 @@ cd ..
 #     --save_epoch 50 \
 #     --loss_type 'nl2' \
 
+# python train.py \
+#     --dataset lorenz96 \
+#     --N 10 \
+#     --seed 42 \
+#     --v 'Affine-ydagger' \
+#     --epochs 3000 \
+#     --save_epoch 100 \
+#     --loss_type 'es' \
+#     --lr_decay_epochs 400,800,1200,1600,2000,2400,2800 \
+#     --lr_decay_rate 0.7 \
+#     --random_noise \
+#     --suffix '_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_st250k' \
+#     --random_h True \
+#     --no_running_loss \
+
 python train.py \
     --dataset lorenz96 \
     --N 10 \
+    --random_noise \
     --seed 42 \
     --v 'Affine-ydagger' \
-    --epochs 3000 \
+    --epochs 1000 \
     --save_epoch 100 \
-    --loss_type 'nl2' \
-    --lr_decay_epochs 400,800,1200,1600,2000,2400,2800 \
-    --lr_decay_rate 0.7 \
-    --random_noise \
-    --suffix '_3k_sigma^2_randomH_l96' \
-    --random_h True
+    --loss_type 'es' \
+    --lr_decay_epochs 300,400,500 \
+    --lr_decay_rate 0.5 \
+    --suffix '_3k_randomH_l96_sigma_y_1_2_infl_st250k' \
+    --random_h True \
+    --no_running_loss \
+
 # python finetune.py \
 #     --dataset lorenz96 \
 #     --seed 42 \

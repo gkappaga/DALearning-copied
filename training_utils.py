@@ -15,6 +15,7 @@ from loss import compute_loss, compute_es, compute_mean_pen, compute_cov_pen
 from networks import NaiveNetwork, SetTransformer, Simple_MLP, Upsampling_MLP
 
 def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=None):
+    # print('entered train_model')
     if args.v == 'Affine-ydagger':
         model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
     else:
@@ -44,6 +45,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         model_Avhat.train()
         model_Ayhat.train()
         model_Aydag.train()
+        infl_model.train()
         # model_Avec.train()
     
     success_count = 0
@@ -65,7 +67,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
         # Sample from prior
         ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
         ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
-
         # Store everything
         ens_list = [ens_v_a]
 
@@ -83,10 +84,10 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             running_orig_loss, running_mean_pen, running_cov_pen = 0., 0., 0.
         
         for i in range(end_ind):
-            # print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}] Step [{i+1}/{end_ind}]', end='\r')
+            # print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}] Step [{i+1}/{end_ind}]', flush = True)
             if args.random_noise:
                 sigma_y_batch = (
-                    torch.rand(B, device=args.device) * (0.9) + 0.1
+                    torch.rand(B, device=args.device) * (1) + 1
                 )
             # get next observation
             obs_y = H_fun(batch_v[i + 1].unsqueeze(1))
@@ -259,10 +260,15 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     s_v_h,
                     obs_y.squeeze(1)
                 ], dim = -1)
-                avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
+                if args.dataset == 'ks':
+                    avhat_output = 1e-4 * model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
+                else:
+                    avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
                 ayhat_output = model_Ayhat(nn_input).view(B, args.ori_dim, args.obs_dim)
                 aydag_output = model_Aydag(nn_input).view(B, args.ori_dim, args.obs_dim)
                 # avec_output = model_Avec(nn_input).view(B, args.ori_dim).unsqueeze(1)
+
+                # localization
 
                 Av = torch.bmm(avhat_output, ens_v_f.permute(0, 2, 1))
                 Av = Av.permute(0, 2, 1)
@@ -272,7 +278,22 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 # multiply aydag with the true observation
                 Aydag_y = torch.bmm(aydag_output, obs_y.permute(0, 2, 1))
                 Aydag_y = Aydag_y.permute(0, 2, 1)
-                ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
+
+                if args.v == 'ks':
+                    ens_v_a = ens_v_f + Ayhat + Aydag_y + Av
+                else:
+                    ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
+                
+                # inflation
+                s_v_h_expanded = s_v_h.unsqueeze(1).expand(-1, N, -1).to(args.device)
+
+                infl_input = torch.cat([ens_v_a, s_v_h_expanded], dim=-1).to(args.device)
+
+                # ens_v_a = ens_v_a + infl_model(
+                #     infl_input.reshape(B * N, args.ori_dim + args.st_output_dim)
+                # ).reshape(B, N, args.ori_dim).to(args.device)
+                # ens_v_a = ens_v_a + infl_model(torch.cat([ens_v_a, s_v_h], dim=-1).view(B, -1)).view(B, N, args.ori_dim)
+                # print(ens_v_a.isnan().any())
 
 
             ens_v_a = torch.clamp(ens_v_a, min=-args.clamp, max=args.clamp)
@@ -309,9 +330,13 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                 num_all_nan_batch += 1
             else:
                 loss = 0
-                weights = 1/(sigma_y_batch**2)
+                
                 # weights = torch.ones(B, device = args.device)
                 for loss_type in args.loss_type:
+                    if args.random_noise and (loss_type == 'nl2' or loss_type == 'l2'):
+                        weights = 1/(sigma_y_batch**2)
+                    else:
+                        weights = torch.ones(B, device = args.device)
                     loss += compute_loss(ens_tensor=ens_tensor, 
                                         batch_v=batch_v, 
                                         loss_type=loss_type, 
@@ -320,11 +345,15 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                         valid_B_mask=valid_B_mask,
                                         norm_p=args.es_p,
                                         kes_sigma=args.kes_sigma,
-                                        weights=weights)
-
+                                        weights=weights,
+                                        l2_weights=None)
+                loss = loss / len(args.loss_type)
                 success_count += torch.sum(valid_B_mask)
                 
                 losses.update(loss.item(), torch.sum(valid_B_mask))
+                
+                optimizer.zero_grad()
+                loss.backward()
                 if args.v == 'Affine-ydagger':
                     nn.utils.clip_grad_norm_(model_Avhat.parameters(), max_norm=1.0)
                     nn.utils.clip_grad_norm_(model_Ayhat.parameters(), max_norm=1.0)
@@ -332,8 +361,6 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                     # nn.utils.clip_grad_norm_(model_Avec.parameters(), max_norm=1.0)
                 else:
                     nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.zero_grad()
-                loss.backward()
                 optimizer.step()
         else:
             if not valid_B_mask.any():
@@ -462,7 +489,7 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                 sigma_y_batch = (
                     torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
                 )
-                sigma_y_batch = torch.linspace(0.1, 3, steps = B, device = args.device)
+                sigma_y_batch = torch.linspace(0.5, 3, steps = B, device = args.device)
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
             ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -651,7 +678,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                         obs_y.squeeze(1)
                     ], dim = -1)
                     # nn_output = model(nn_input).view(-1, args.output_dim)
-                    avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
+                    if args.dataset == 'ks':
+                        avhat_output = 1e-4 * model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
+                    else:
+                        avhat_output = model_Avhat(nn_input).view(B, args.ori_dim, args.ori_dim)
                     ayhat_output = model_Ayhat(nn_input).view(B, args.ori_dim, args.obs_dim)
                     aydag_output = model_Aydag(nn_input).view(B, args.ori_dim, args.obs_dim)
                     # avec_output = model_Avec(nn_input).view(B, args.ori_dim).unsqueeze(1)
@@ -665,6 +695,13 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
                     Aydag_y = torch.bmm(aydag_output, obs_y.permute(0, 2, 1))
                     Aydag_y = Aydag_y.permute(0, 2, 1)
                     ens_v_a = Av + Ayhat + Aydag_y + ens_v_f
+                    s_v_h_expanded = s_v_h.unsqueeze(1).expand(-1, N, -1).to(args.device)
+
+                    infl_input = torch.cat([ens_v_a, s_v_h_expanded], dim=-1).to(args.device)
+
+                    # ens_v_a = ens_v_a + infl_model(
+                    #     infl_input.reshape(B * N, args.ori_dim + args.st_output_dim)
+                    # ).reshape(B, N, args.ori_dim).to(args.device)
                     if analysis:
                         Vnn1 = ens_v_f
                         Vnn2 = ens_v_f - mean_ens_v_f
@@ -726,12 +763,61 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
             # Loss functions
             # absolute rmse
             crps_tensor = torch.mean(compute_es(ens_states=ens_tensor, true_states=batch_v, norm_p=1), dim=0) / torch.mean(torch.norm(batch_v, p=2, dim=2), dim=0)
+            crps_tensor = torch.mean(compute_es(ens_states=ens_tensor, true_states=batch_v, norm_p=1), dim=0)
             rmse_tensor = torch.mean(torch.sqrt(torch.mean((ens_tensor.mean(dim=2) - batch_v) ** 2, dim=2)), dim=0)
             rms_tensor = torch.mean(torch.sqrt(torch.mean((batch_v) ** 2, dim=2)), dim=0)
             rrmse_tensor = rmse_tensor / rms_tensor
             # relative rmse
             # rmse_tensor = torch.sqrt(torch.mean((ens_tensor.mean(dim=2) - batch_v) ** 2, dim=2)) / torch.sqrt(torch.mean((batch_v) ** 2, dim=2))
             rmv_tensor = torch.mean(torch.sqrt(N / (N-1) * torch.mean((ens_tensor - batch_v.unsqueeze(2)) ** 2, dim=(2,3))),dim=0)
+            ens_tensor = torch.stack(ens_list) if plot_figures else None
+
+            if args.v == "EtE" or args.v == 'LearnK' or args.v == 'Affine' or args.v == 'Affine-ydagger':
+                loc_tensor = None
+            else:
+                if args.no_localization:
+                    loc_tensor = torch.empty(1, device=args.device)
+                else:
+                    loc_tensor = torch.stack(loc_records) if len(loc_records) > 0 else torch.empty(1, device=args.device)
+
+            # Memory-safe metric accumulation
+            # T = len(ens_list)
+            # scale = N / max(N - 1, 1)
+
+            # rmse_sum = torch.zeros(B, device=args.device)
+            # rmv_sum = torch.zeros(B, device=args.device)
+            # crps_sum = torch.zeros(B, device=args.device)
+            # rms_sum = torch.zeros(B, device=args.device)
+            # true_norm_sum = torch.zeros(B, device=args.device)
+
+            # for t, ens_t in enumerate(ens_list):
+            #     true_t = batch_v[t]  # [B, D]
+
+            #     # RMSE
+            #     mean_t = ens_t.mean(dim=1)  # [B, D]
+            #     rmse_sum += torch.sqrt(torch.mean((mean_t - true_t) ** 2, dim=1))
+
+            #     # RMV
+            #     diff_t = ens_t - true_t.unsqueeze(1)  # [B, N, D]
+            #     rmv_sum += torch.sqrt(scale * torch.mean(diff_t ** 2, dim=(1, 2)))
+
+            #     # CRPS / ES, timestep-by-timestep
+            #     crps_step = compute_es(
+            #         ens_states=ens_t.unsqueeze(0),     # [1, B, N, D]
+            #         true_states=true_t.unsqueeze(0),   # [1, B, D]
+            #         norm_p=1
+            #     ).squeeze(0)  # [B]
+            #     crps_sum += crps_step
+
+            #     # denominators
+            #     rms_sum += torch.sqrt(torch.mean(true_t ** 2, dim=1))
+            #     true_norm_sum += torch.norm(true_t, p=2, dim=1)
+
+            # rmse_tensor = rmse_sum / T
+            # rmv_tensor = rmv_sum / T
+            # rms_tensor = rms_sum / T
+            # rrmse_tensor = rmse_tensor / rms_tensor
+            # crps_tensor = (crps_sum / T) / (true_norm_sum / T)
             
             if batch_ind == 0:
                 rmse_tensor_all, rmv_tensor_all, rrmse_tensor_all, crps_tensor_all = rmse_tensor, rmv_tensor, rrmse_tensor, crps_tensor
@@ -792,7 +878,10 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
         return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor, result, norm, an_results, aydag, ayhat, kalmans, avhat
 
     if plot:
-        return rrmse_tensor_all[valid_B_mask], sigma_y_batch
+        if args.random_noise:
+            return rrmse_tensor_all[valid_B_mask], sigma_y_batch
+        else:
+            return rrmse_tensor_all[valid_B_mask].mean(), args.sigma_y
     return mean_rmse, std_rmse, mean_rmv, std_rmv, mean_rrmse, std_rrmse, mean_crps, std_crps, no_nan_percent, loc_tensor
 
 def test_SequentialEnKF(loader, args, infl=1, H_info=None, localization=False):
@@ -941,9 +1030,25 @@ def set_models(args):
         #     latent_dim = 64
         # ).to(args.device)
         infl_model  = NaiveNetwork(1)
+        # infl_model = Simple_MLP(
+        #     d_input = args.ori_dim + args.st_output_dim,
+        #     d_output = args.ori_dim,
+        #     num_hidden_layers = 1,
+        #     latent_dim = 64
+        # ).to(args.device)
         local_model = NaiveNetwork(1)
-        st_model1   = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
-                                        hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+        # local_model = Simple_MLP(
+        #     d_input = args.st_output_dim,
+        #     d_output = args.ori_dim**2 + 2 * args.ori_dim * args.obs_dim,
+        #     num_hidden_layers = 2,
+        #     latent_dim = 128
+        # )
+        if args.dataset == 'lorenz63':
+            st_model1   = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                            hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+        else:
+            st_model1   = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
+                                            hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         st_model2   = NaiveNetwork(1)
     if args.v != 'LearnK' and args.v != 'Affine' and args.v != 'Affine-ydagger':
         if args.no_localization or args.v == 'EtE':

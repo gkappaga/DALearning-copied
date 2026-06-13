@@ -2,12 +2,12 @@
 
 # Submit this script with: sbatch <this-filename>
 
-#SBATCH --time=3-00:00:00     # walltime (3 days)
+#SBATCH --time=1-12:00:00     # walltime (3 days)
 #SBATCH --nodes=1             # number of nodes (1 node)
 #SBATCH --gres=gpu:p100:1          # 3 GPUs of any type
 #SBATCH --partition=gpu       # use GPU partition
 #SBATCH --ntasks=1            # 1 task
-#SBATCH -J "SMF_vsN"          # job name
+#SBATCH -J "L96gs"          # job name
 #SBATCH --mail-user=gkappaga@caltech.edu  # email address
 #SBATCH --mail-type=BEGIN     # email notification at start
 #SBATCH --mail-type=END       # email notification at end
@@ -21,4 +21,4 @@
 cd $HOME/gkappaga-DALearning-2/DALearning-copied
 
 # Run the experiment script (no args expected)
-python grid_search.py
+python rrmse_vs_ens_size.py
