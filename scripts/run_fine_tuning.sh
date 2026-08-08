@@ -34,6 +34,8 @@ python finetune.py \
     --save_epoch 50 \
     --dataset lorenz96 \
     --v Affine-ydagger \
+    --random_h True \
+    --random_noise \
     --train_steps 60 \
     --train_traj_num 8192 \
     --seed 42 \
@@ -41,7 +43,7 @@ python finetune.py \
     --sigma_y 1 \
     --loss_type 'es' \
     --num_loader_workers 16 \
-    --cp_load_path 'save/2026-05-31_18-29lorenz96_1.0_10_60_8192_es_joint_Affine-ydagger_3k_sigma^2_randomH_l96_sigma_y_1_2_infl_st250k/cp_1100.pth'
+    --cp_load_path 'important_save/2026-06-03_19-46lorenz96_None_10_60_8192_es_joint_Affine-ydagger_1k_randomH_l96_sigma_y_1_2_infl_st250k/cp_1000.pth'
 
 
 # python finetune.py \

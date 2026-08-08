@@ -49,7 +49,7 @@ cd ..
 #     --no_running_loss \
 
 python train.py \
-    --dataset lorenz96 \
+    --dataset ks \
     --N 10 \
     --random_noise \
     --seed 42 \
@@ -57,9 +57,9 @@ python train.py \
     --epochs 1000 \
     --save_epoch 100 \
     --loss_type 'es' \
-    --lr_decay_epochs 300,400,500 \
+    --lr_decay_epochs 200,400,600 \
     --lr_decay_rate 0.5 \
-    --suffix '_3k_randomH_l96_sigma_y_1_2_infl_st250k' \
+    --suffix '_3k_randomH_ks_sigma_y_1_2_infl_st250k_fixedh' \
     --random_h True \
     --no_running_loss \
 

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import warnings
 
-def compute_es(ens_states, true_states, l2_weights=None, norm_p=1):
+def compute_es(ens_states, true_states, norm_p=1):
     """
     Computes the Energy Score (ES).
     ES(F, y) = E_F[||X - y||^norm_p] - (1/2) * E_F[||X - X'||^norm_p]
@@ -21,11 +21,6 @@ def compute_es(ens_states, true_states, l2_weights=None, norm_p=1):
     if N <= 1: # ES is not well-defined or is trivially zero for N <= 1.
         return torch.zeros(T, B, device=ens_states.device, dtype=ens_states.dtype)
 
-    if l2_weights is None:
-        l2_weights = torch.ones(B, device=ens_states.device, dtype=ens_states.dtype)
-    else:
-        l2_weights = l2_weights.to(device=ens_states.device, dtype=ens_states.dtype)
-
     # First term: E_F[||X - y||^norm_p]
     # Approximate E_F by averaging over ensemble members.
     true_expanded = true_states.unsqueeze(2)  # Shape: [T, B, 1, D]
@@ -35,8 +30,6 @@ def compute_es(ens_states, true_states, l2_weights=None, norm_p=1):
         dist_to_true = torch.pow(dist_to_true, norm_p)
     
     term_obs = torch.mean(dist_to_true, dim=2)  # Shape: [T, B]
-    
-    term_obs = l2_weights * term_obs
     
     sum_pairwise_dist = torch.zeros(T, B, device=ens_states.device, dtype=ens_states.dtype)
     for i in range(N):
@@ -129,8 +122,7 @@ def compute_kernel_es(ens_states, true_states, sigma=None):
 
 
 def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None, 
-                 valid_B_mask=None, norm_p=1, kes_sigma=1, return_sum=False, normalize_val=None,
-                 weights=None, l2_weights=None):
+                 valid_B_mask=None, norm_p=1, kes_sigma=1, return_sum=False, normalize_val=None):
     """
     Computes loss. Supports various types including L2, ES, and kernel ES.
 
@@ -195,7 +187,7 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
         mse_features = (ens_mean_timed - true_states_timed) ** 2
         loss_values_per_element = torch.sqrt(torch.sum(mse_features, dim=2) + 1e-8)
     elif loss_type == 'es':
-        loss_values_per_element = compute_es(ens_states_timed, true_states_timed, l2_weights=l2_weights, norm_p=norm_p)
+        loss_values_per_element = compute_es(ens_states_timed, true_states_timed, norm_p=norm_p)
     elif loss_type == 'nes' or loss_type == 'tnes':
         es_vals = compute_es(ens_states_timed, true_states_timed, norm_p=norm_p) # Shape [T_slice, B]
         true_norm_vals = torch.norm(true_states_timed, p=2, dim=2) ** norm_p # Shape [T_slice, B]
@@ -242,12 +234,10 @@ def compute_loss(ens_tensor, batch_v, loss_type, ignore_first=0, end_ind=None,
     else:
         raise NotImplementedError(f"Loss type '{loss_type}' is not implemented")
     
-    masked_loss_values = loss_values_per_element[valid_B_mask_sliced] # modify with the weights according to sigma
+    masked_loss_values = loss_values_per_element[valid_B_mask_sliced]
     ### add some debug print statements
     if masked_loss_values.numel() == 0:
         return torch.tensor(0.0, device=batch_v.device, requires_grad=True)
-    if weights is not None:
-        masked_loss_values = loss_values_per_element @ weights / loss_values_per_element.shape[1]
     if return_sum:
         return torch.sum(masked_loss_values)
     else:

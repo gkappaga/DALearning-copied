@@ -83,6 +83,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             # mc_batches = 0
             running_orig_loss, running_mean_pen, running_cov_pen = 0., 0., 0.
         
+        H_matrices = None
         for i in range(end_ind):
             # print(f'Training epoch : [{epoch}][{batch_ind + 1}/{len(loader)}] Step [{i+1}/{end_ind}]', flush = True)
             if args.random_noise:
@@ -111,16 +112,23 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
 
             # preparation for individual ensemble data
             # if args.random_H:
-            H_matrices = []
             if args.random_h:
-                selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # [B, obs_dim]
+                # One independently sampled H per trajectory, fixed over time.
+                if i == 0 or not getattr(args, 'eval_random_h_fixed_per_trajectory', True):
+                    selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # [B, obs_dim]
 
-                # H as [B, obs_dim, ori_dim] (each row picks a coordinate)
-                H = F.one_hot(selected_inds, num_classes=args.ori_dim).to(ens_v_f.dtype)  # [B, obs_dim, ori_dim]
+                    # H as [B, obs_dim, ori_dim] (each row picks a coordinate)
+                    H = F.one_hot(selected_inds, num_classes=args.ori_dim).to(ens_v_f.dtype)  # [B, obs_dim, ori_dim]
 
-                # If you want H as [B, ori_dim, obs_dim], transpose:
-                H_matrices = H.transpose(1, 2)  # [B, ori_dim, obs_dim]
+                    H_matrices = H.transpose(1, 2)  # [B, ori_dim, obs_dim]
                 hv = torch.bmm(ens_v_f, H_matrices)
+                # Use exactly the same H for the true observation.
+                obs_y = torch.bmm(batch_v[i + 1].unsqueeze(1), H_matrices)
+                if not args.random_noise:
+                    obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+                else:
+                    sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+                    obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
             else:
                 hv = H_fun(ens_v_f)
             # hv = H_fun(ens_v_f)
@@ -331,12 +339,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
             else:
                 loss = 0
                 
-                # weights = torch.ones(B, device = args.device)
                 for loss_type in args.loss_type:
-                    if args.random_noise and (loss_type == 'nl2' or loss_type == 'l2'):
-                        weights = 1/(sigma_y_batch**2)
-                    else:
-                        weights = torch.ones(B, device = args.device)
                     loss += compute_loss(ens_tensor=ens_tensor, 
                                         batch_v=batch_v, 
                                         loss_type=loss_type, 
@@ -344,9 +347,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
                                         end_ind=None, 
                                         valid_B_mask=valid_B_mask,
                                         norm_p=args.es_p,
-                                        kes_sigma=args.kes_sigma,
-                                        weights=weights,
-                                        l2_weights=None)
+                                        kes_sigma=args.kes_sigma)
                 loss = loss / len(args.loss_type)
                 success_count += torch.sum(valid_B_mask)
                 
@@ -446,7 +447,7 @@ def train_model(epoch, loader, model_list, optimizer, scheduler, args, H_info=No
     else:
         return losses.avg
 
-def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', analysis=False, plot=False):
+def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', analysis=False, plot=False, return_all_metrics=False):
     if args.v == 'Affine-ydagger':
         model_Avhat, model_Ayhat, model_Aydag, infl_model, local_model, st_model1, st_model2 = model_list
     else:
@@ -483,13 +484,12 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
             batch_v = batch_v.to(device=args.device)
             B = batch_v.shape[1]  # number of trajectories
             if args.random_noise:
-                sigma_y_batch = (
-                    torch.rand(B, device=args.device) * (0.9) + 0.1
+                sigma_y_batch = torch.linspace(
+                    getattr(args, 'eval_sigma_min', 0.5),
+                    getattr(args, 'eval_sigma_max', 3.0),
+                    steps=B,
+                    device=args.device,
                 )
-                sigma_y_batch = (
-                    torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
-                )
-                sigma_y_batch = torch.linspace(0.5, 3, steps = B, device = args.device)
             # Sample from prior
             ens_v_a = batch_v[0].unsqueeze(1).repeat(1, m, 1)
             ens_v_a = ens_v_a + torch.randn_like(ens_v_a, device=args.device) * args.sigma_ens
@@ -523,14 +523,26 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
                 # preparation for individual ensemble data
                 if args.random_h:
-                    selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # [B, obs_dim]
+                    # Evaluation default: one independently sampled H per
+                    # trajectory, held fixed over the trajectory. Set
+                    # eval_random_h_fixed_per_trajectory=False to retain the
+                    # old behavior of resampling H at every time step.
+                    if i == 0 or not getattr(args, 'eval_random_h_fixed_per_trajectory', True):
+                        selected_inds = torch.rand(B, args.ori_dim, device=args.device).topk(args.obs_dim, dim=1).indices  # [B, obs_dim]
 
-                    # H as [B, obs_dim, ori_dim] (each row picks a coordinate)
-                    H = F.one_hot(selected_inds, num_classes=args.ori_dim).to(ens_v_f.dtype)  # [B, obs_dim, ori_dim]
+                        # H as [B, obs_dim, ori_dim] (each row picks a coordinate)
+                        H = F.one_hot(selected_inds, num_classes=args.ori_dim).to(ens_v_f.dtype)  # [B, obs_dim, ori_dim]
 
-                    # If you want H as [B, ori_dim, obs_dim], transpose:
-                    H_matrices = H.transpose(1, 2)  # [B, ori_dim, obs_dim]
+                        H_matrices = H.transpose(1, 2)  # [B, ori_dim, obs_dim]
                     hv = torch.bmm(ens_v_f, H_matrices)
+                    # The observation and forecast observation must use the
+                    # same randomly sampled H.
+                    obs_y = torch.bmm(batch_v[i + 1].unsqueeze(1), H_matrices)
+                    if not args.random_noise:
+                        obs_y += args.sigma_y * torch.randn_like(obs_y, device=args.device)
+                    else:
+                        sigma_y_exp = sigma_y_batch.view(B, 1, 1).expand_as(obs_y)
+                        obs_y += sigma_y_exp * torch.randn_like(obs_y, device=args.device)
                 else:
                     hv = H_fun(ens_v_f)
                 
@@ -879,6 +891,13 @@ def test_model(loader, model_list, args, infl=1, H_info=None, plot_figures=True,
 
     if plot:
         if args.random_noise:
+            if return_all_metrics:
+                return {
+                    'rmse': rmse_tensor_all,
+                    'rrmse': rrmse_tensor_all,
+                    'crps': crps_tensor_all,
+                    'valid_mask': valid_B_mask,
+                }, sigma_y_batch
             return rrmse_tensor_all[valid_B_mask], sigma_y_batch
         else:
             return rrmse_tensor_all[valid_B_mask].mean(), args.sigma_y
@@ -1029,13 +1048,13 @@ def set_models(args):
         #     num_hidden_layers=1,
         #     latent_dim = 64
         # ).to(args.device)
-        infl_model  = NaiveNetwork(1)
-        # infl_model = Simple_MLP(
-        #     d_input = args.ori_dim + args.st_output_dim,
-        #     d_output = args.ori_dim,
-        #     num_hidden_layers = 1,
-        #     latent_dim = 64
-        # ).to(args.device)
+        # infl_model  = NaiveNetwork(1)
+        infl_model = Simple_MLP(
+            d_input = args.ori_dim + args.st_output_dim,
+            d_output = args.ori_dim,
+            num_hidden_layers = 1,
+            latent_dim = 64
+        ).to(args.device)
         local_model = NaiveNetwork(1)
         # local_model = Simple_MLP(
         #     d_input = args.st_output_dim,
@@ -1048,7 +1067,7 @@ def set_models(args):
                                             hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         else:
             st_model1   = SetTransformer(input_dim=args.ori_dim + args.obs_dim, num_heads=8, num_inds=args.st_num_seeds, output_dim=args.st_output_dim, 
-                                            hidden_dim=args.hidden_dim, num_layers=1, freeze_WQ=not args.unfreeze_WQ).to(args.device)
+                                            hidden_dim=args.hidden_dim, num_layers=3, freeze_WQ=not args.unfreeze_WQ).to(args.device)
         st_model2   = NaiveNetwork(1)
     if args.v != 'LearnK' and args.v != 'Affine' and args.v != 'Affine-ydagger':
         if args.no_localization or args.v == 'EtE':

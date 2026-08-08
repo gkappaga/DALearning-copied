@@ -1095,7 +1095,7 @@ def print_test_results(results):
         print(f"No NAN Percentage: {results['no_nan_percent']:.2f}%")
 
 
-def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', loc_radius=None, save_pdf=False):
+def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=True, fig_name='example_fig', loc_radius=None, save_pdf=False, return_all_metrics=False):
     """
     Tests a classic data assimilation filter (e.g., EnKF, ESRF, LETKF) and
     optionally compares results against a particle filter baseline.
@@ -1222,8 +1222,11 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
             B = batch_v.shape[1]
             print(args.random_noise)
             if args.random_noise:
-                sigma_y_batch = (
-                    torch.arange(0.1, 1 + (0.9/B), step = (0.9)/(B-1), device=args.device)
+                sigma_y_batch = torch.linspace(
+                    getattr(args, 'eval_sigma_min', 0.5),
+                    getattr(args, 'eval_sigma_max', 3.0),
+                    steps=B,
+                    device=args.device,
                 )
             else:
                 sigma_y_batch = torch.full((B,), args.sigma_y, device=args.device)
@@ -1258,16 +1261,22 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
             for i in range(len(batch_v) - 1):
                 print(f" Time step {i + 1}/{len(batch_v) - 1} ", end='\r')
                 if args.random_noise:
-                    sigma_y_batch = torch.empty(B, device=args.device).uniform_(0.1, 1.0)
-                    sigma_y_batch = torch.linspace(0.5, 3, steps = B, device=args.device)
-                    # OR if you want the deterministic grid but reshuffled each timestep:
-                    # sigma_y_batch = torch.linspace(0.1, 1.0, steps=B, device=args.device)[torch.randperm(B, device=args.device)]
+                    sigma_y_batch = torch.linspace(
+                        getattr(args, 'eval_sigma_min', 0.5),
+                        getattr(args, 'eval_sigma_max', 3.0),
+                        steps=B,
+                        device=args.device,
+                    )
                 else:
                     sigma_y_batch = torch.full((B,), args.sigma_y, device=args.device)
 
                 if args.random_h:
-                    H_fun_step, H = make_random_H_step(args, B, ens_v_a.dtype)
-                    H_matrices = H.transpose(1, 2).contiguous()
+                    # One independently sampled H per trajectory, fixed over
+                    # time by default. Toggle the attribute to recover the old
+                    # per-time-step behavior.
+                    if i == 0 or not getattr(args, 'eval_random_h_fixed_per_trajectory', True):
+                        H_fun_step, H = make_random_H_step(args, B, ens_v_a.dtype)
+                        H_matrices = H.transpose(1, 2).contiguous()
                 else:
                     H_fun, H = H_info  # only meaningful if args.access_to_H expects it
                     def H_fun_step(V):
@@ -1789,6 +1798,13 @@ def test_ClassicFilter_v2(loader, args, plot, infl=1, H_info=None, plot_figures=
                 final_metrics['mean_pf_rmse'], final_metrics['std_pf_rmse'] = get_mean_std(all_results['pf_rmse'][valid_B_mask])
     if plot:
         if args.random_noise:
+            if return_all_metrics:
+                return {
+                    'rmse': all_results['rmse'],
+                    'rrmse': all_results['rrmse'],
+                    'crps': all_results['crps'],
+                    'rcrps': all_results['rcrps'],
+                }, sigma_y_batch
             return all_results['rrmse'], sigma_y_batch
         return all_results['rrmse'].mean().item(), args.sigma_y
     print(final_metrics)

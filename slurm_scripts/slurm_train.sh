@@ -4,10 +4,10 @@
 
 #SBATCH --time=2-00:00:00     # walltime (1 days)
 #SBATCH --nodes=1           # number of nodes (1 node)
-#SBATCH --gres=gpu:1        # 4 GPUs of any type
+#SBATCH --gres=gpu:p100:1        # 4 GPUs of any type
 #SBATCH --partition=gpu     # use GPU partition
 #SBATCH --ntasks=1          # 1 task
-#SBATCH -J "l2_in_es_sy_weight"   # job name
+#SBATCH -J "ks_train"   # job name
 #SBATCH --exclude=hpc-93-36
 #SBATCH --mail-user=gkappaga@caltech.edu # email address
 #SBATCH --mail-type=BEGIN   # email notification at start
